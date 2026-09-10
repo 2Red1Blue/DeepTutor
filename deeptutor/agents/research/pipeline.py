@@ -90,6 +90,7 @@ from deeptutor.runtime.stream_bus import StreamBus
 from deeptutor.services.config import parse_language
 from deeptutor.services.config.loader import get_capability_params
 from deeptutor.services.llm import get_llm_config, prepare_multimodal_messages
+from deeptutor.services.llm.structured_retry import payload_with_reasoning_retry
 from deeptutor.services.prompt import get_prompt_manager
 from deeptutor.services.prompt.language import append_language_directive
 from deeptutor.services.sandbox import exec_capability_available
@@ -300,6 +301,29 @@ class ReportOutline:
 # ---------------------------------------------------------------------------
 # ResearchPipeline
 # ---------------------------------------------------------------------------
+
+
+def _outline_payload_is_usable(payload: Any) -> bool:
+    """Whether a decompose response actually carries sub-topics.
+
+    The parser accepts a bare array as well as an object, so "usable" cannot
+    be the generic "is a non-empty dict" the object-shaped callers use — an
+    array answer would be thrown away and retried for nothing.
+    """
+    if isinstance(payload, list):
+        return bool(payload)
+    if isinstance(payload, dict):
+        return bool(payload.get("sub_topics") or payload.get("subtopics"))
+    return False
+
+
+def _report_outline_payload_is_usable(payload: Any) -> bool:
+    """Whether a report-outline response actually carries sections."""
+    if isinstance(payload, list):
+        return bool(payload)
+    if isinstance(payload, dict):
+        return bool(payload.get("sections"))
+    return False
 
 
 class ResearchPipeline:
@@ -835,21 +859,32 @@ class ResearchPipeline:
             trace_group="plan",
             research_status_key="decompose_target",
         )
-        step = await self._run_labeled_step(
-            client=client,
-            messages=messages,
-            tool_schemas=None,
-            protocol=_PROTOCOL_DECOMPOSE,
-            stream=stream,
-            stage="decomposing",
-            iter_meta=iter_meta,
-            max_tokens=self._budgets["outline"]["max_tokens"],
-            eager_sub_trace=False,
-        )
-        return self._parse_outline(topic, step.text)
 
-    def _parse_outline(self, topic: str, raw: str) -> list[SubTopicItem]:
-        data = parse_json_response(raw, logger_instance=logger, fallback={})
+        async def _attempt(reasoning_effort: str | None) -> str:
+            step = await self._run_labeled_step(
+                client=client,
+                messages=messages,
+                tool_schemas=None,
+                protocol=_PROTOCOL_DECOMPOSE,
+                stream=stream,
+                stage="decomposing",
+                iter_meta=iter_meta,
+                max_tokens=self._budgets["outline"]["max_tokens"],
+                reasoning_effort=reasoning_effort,
+                eager_sub_trace=False,
+            )
+            return step.text
+
+        # Decompose asks for the whole outline in one shot, so a reasoning
+        # model that spends the budget thinking returns nothing to parse and
+        # the topic silently degrades to a single sub-topic — research's
+        # version of the one-chapter book (#1316).
+        data = await payload_with_reasoning_retry(
+            _attempt, is_usable=_outline_payload_is_usable, logger_instance=logger
+        )
+        return self._parse_outline(topic, data)
+
+    def _parse_outline(self, topic: str, data: Any) -> list[SubTopicItem]:
         if isinstance(data, list):
             iterable: list[Any] = data
         elif isinstance(data, dict):
@@ -1505,23 +1540,32 @@ class ResearchPipeline:
             research_status_key="report_outline",
             report_part="outline",
         )
-        step = await self._run_labeled_step(
-            client=client,
-            messages=messages,
-            tool_schemas=None,
-            protocol=_PROTOCOL_REPORT_OUTLINE,
-            stream=stream,
-            stage="reporting",
-            iter_meta=iter_meta,
-            max_tokens=self._budgets["report_outline"]["max_tokens"],
-            eager_sub_trace=False,
+
+        async def _attempt(reasoning_effort: str | None) -> str:
+            step = await self._run_labeled_step(
+                client=client,
+                messages=messages,
+                tool_schemas=None,
+                protocol=_PROTOCOL_REPORT_OUTLINE,
+                stream=stream,
+                stage="reporting",
+                iter_meta=iter_meta,
+                max_tokens=self._budgets["report_outline"]["max_tokens"],
+                reasoning_effort=reasoning_effort,
+                eager_sub_trace=False,
+            )
+            return step.text
+
+        # Same one-shot payload, same starvation: an empty outline here costs
+        # the reader the whole report structure.
+        data = await payload_with_reasoning_retry(
+            _attempt, is_usable=_report_outline_payload_is_usable, logger_instance=logger
         )
-        return self._parse_report_outline(topic, step.text, blocks)
+        return self._parse_report_outline(topic, data, blocks)
 
     def _parse_report_outline(
-        self, topic: str, raw: str, blocks: list[ResearchedBlock]
+        self, topic: str, data: Any, blocks: list[ResearchedBlock]
     ) -> ReportOutline:
-        data = parse_json_response(raw, logger_instance=logger, fallback={})
         valid_ids = {rb.block.block_id for rb in blocks}
         title_to_id = {rb.block.sub_topic.lower(): rb.block.block_id for rb in blocks}
 
@@ -2105,13 +2149,18 @@ class ResearchPipeline:
     def _build_client(self) -> Any:
         return build_openai_client(self.client_config)
 
-    def _completion_kwargs(self, max_tokens: int) -> dict[str, Any]:
+    def _completion_kwargs(
+        self, max_tokens: int, reasoning_effort: str | None = None
+    ) -> dict[str, Any]:
         return build_completion_kwargs(
             temperature=self._temperature,
             model=self.model,
             max_tokens=max_tokens,
             binding=self.binding,
-            reasoning_effort=self.reasoning_effort,
+            # A step may turn thinking down for one call (a retry after the
+            # model spent the whole budget on it); otherwise the configured
+            # level stands.
+            reasoning_effort=reasoning_effort or self.reasoning_effort,
         )
 
     async def _run_labeled_step(
@@ -2125,6 +2174,7 @@ class ResearchPipeline:
         stage: str,
         iter_meta: dict[str, Any],
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         final_meta: dict[str, Any] | None = None,
         eager_sub_trace: bool = True,
     ) -> LabeledStepResult:
@@ -2135,7 +2185,7 @@ class ResearchPipeline:
             client=client,
             model=self.model,
             messages=messages,
-            completion_kwargs=self._completion_kwargs(max_tokens),
+            completion_kwargs=self._completion_kwargs(max_tokens, reasoning_effort),
             tool_schemas=tool_schemas,
             allowed_labels=protocol.allowed,
             final_labels=protocol.final,

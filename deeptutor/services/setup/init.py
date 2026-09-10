@@ -87,7 +87,8 @@ DEFAULT_AGENTS_SETTINGS = {
         # both (#1316). Matched to `research` rather than pushed higher: the
         # same "long structured output" shape, the same accepted risk against
         # providers that cap `max_tokens`, and the low-effort retry in
-        # `book/json_retry.py` is what actually rescues a starved round.
+        # `services/llm/structured_retry.py` is what actually rescues a starved
+        # round.
         "book": {"temperature": 0.5, "max_tokens": 12000},
         "chat": {
             "temperature": 0.2,
