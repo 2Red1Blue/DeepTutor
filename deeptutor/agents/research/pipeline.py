@@ -88,6 +88,7 @@ from deeptutor.runtime.agentic.tool_dispatch import (
 from deeptutor.runtime.registry.tool_registry import get_tool_registry
 from deeptutor.runtime.stream_bus import StreamBus
 from deeptutor.services.config import parse_language
+from deeptutor.services.config.loader import get_capability_params
 from deeptutor.services.llm import get_llm_config, prepare_multimodal_messages
 from deeptutor.services.prompt import get_prompt_manager
 from deeptutor.services.prompt.language import append_language_directive
@@ -237,7 +238,6 @@ def _is_citable_tool(name: str) -> bool:
 
 
 # Token budget for the note summarization sidecar.
-DEFAULT_NOTE_MAX_TOKENS = 1500
 # How much of the raw tool output we feed into the note summarizer.
 NOTE_RAW_INPUT_TRUNCATE_CHARS = 8000
 
@@ -249,13 +249,11 @@ DEFAULT_REPHRASE_MAX_ITERATIONS = (
 )
 DEFAULT_REPHRASE_MAX_ROUNDS = 3
 DEFAULT_REPHRASE_MAX_QUESTIONS_PER_ROUND = 3
+# Per-stage token budgets moved to agents.yaml — see
+# ``DEFAULT_RESEARCH_PARAMS`` in services.config.loader. agents.yaml owns
+# every LLM budget; this module keeps only runtime behaviour (iteration
+# caps, tool policy), which is main.yaml's half of the split.
 DEFAULT_BLOCK_MAX_ITERATIONS = 5
-DEFAULT_BLOCK_MAX_TOKENS = 6000
-DEFAULT_OUTLINE_MAX_TOKENS = 2000
-DEFAULT_REPORT_OUTLINE_MAX_TOKENS = 2000
-DEFAULT_REPORT_INTRO_MAX_TOKENS = 3000
-DEFAULT_REPORT_SECTION_MAX_TOKENS = 6000
-DEFAULT_REPORT_CONCLUSION_MAX_TOKENS = 3000
 DEFAULT_REPORT_STEP_MAX_ATTEMPTS = 3
 DEFAULT_INITIAL_SUBTOPICS = 5
 DEFAULT_MAX_PARALLEL_TOPICS = 3
@@ -406,6 +404,7 @@ class ResearchPipeline:
         # ``geogebra_analysis`` uses for the same reason, and retries are off by
         # default: only a caller who knows its tools are flaky (rather than
         # slow) should pay for a second attempt.
+        self._budgets = get_capability_params("research")
         self.tool_timeout = max(
             1,
             _read_int(
@@ -769,7 +768,7 @@ class ResearchPipeline:
                 protocol=_PROTOCOL_REPHRASE,
                 client=client,
                 model=self.model,
-                completion_kwargs=self._completion_kwargs(DEFAULT_BLOCK_MAX_TOKENS),
+                completion_kwargs=self._completion_kwargs(self._budgets["block"]["max_tokens"]),
                 binding=self.binding,
                 tool_schemas=tool_schemas,
                 stream=stream,
@@ -844,7 +843,7 @@ class ResearchPipeline:
             stream=stream,
             stage="decomposing",
             iter_meta=iter_meta,
-            max_tokens=DEFAULT_OUTLINE_MAX_TOKENS,
+            max_tokens=self._budgets["outline"]["max_tokens"],
             eager_sub_trace=False,
         )
         return self._parse_outline(topic, step.text)
@@ -960,7 +959,7 @@ class ResearchPipeline:
                 protocol=_PROTOCOL_BLOCK,
                 client=client,
                 model=self.model,
-                completion_kwargs=self._completion_kwargs(DEFAULT_BLOCK_MAX_TOKENS),
+                completion_kwargs=self._completion_kwargs(self._budgets["block"]["max_tokens"]),
                 binding=self.binding,
                 tool_schemas=tool_schemas,
                 stream=stream,
@@ -1198,7 +1197,7 @@ class ResearchPipeline:
         )
         messages = self._build_system_user_messages(system_prompt, user_prompt)
         try:
-            kwargs = self._completion_kwargs(DEFAULT_NOTE_MAX_TOKENS)
+            kwargs = self._completion_kwargs(self._budgets["note"]["max_tokens"])
             response = await client.chat.completions.create(
                 model=self.model, messages=messages, stream=False, **kwargs
             )
@@ -1514,7 +1513,7 @@ class ResearchPipeline:
             stream=stream,
             stage="reporting",
             iter_meta=iter_meta,
-            max_tokens=DEFAULT_REPORT_OUTLINE_MAX_TOKENS,
+            max_tokens=self._budgets["report_outline"]["max_tokens"],
             eager_sub_trace=False,
         )
         return self._parse_report_outline(topic, step.text, blocks)
@@ -1668,7 +1667,7 @@ class ResearchPipeline:
             client=client,
             label=self._t("labels.report_intro", default="Introduction"),
             call_id_root="research-report-intro",
-            max_tokens=DEFAULT_REPORT_INTRO_MAX_TOKENS,
+            max_tokens=self._budgets["report_intro"]["max_tokens"],
             extra_meta={
                 "research_status_key": "report_intro",
                 "report_part": "intro",
@@ -1711,7 +1710,7 @@ class ResearchPipeline:
             client=client,
             label=(f"{self._t('labels.report_section', default='Section')}: {section.title}"),
             call_id_root=f"research-report-section-{section.id}",
-            max_tokens=DEFAULT_REPORT_SECTION_MAX_TOKENS,
+            max_tokens=self._budgets["report_section"]["max_tokens"],
             extra_meta={
                 "research_status_key": "report_section",
                 "report_part": "section",
@@ -1755,7 +1754,7 @@ class ResearchPipeline:
             client=client,
             label=self._t("labels.report_conclusion", default="Conclusion"),
             call_id_root="research-report-conclusion",
-            max_tokens=DEFAULT_REPORT_CONCLUSION_MAX_TOKENS,
+            max_tokens=self._budgets["report_conclusion"]["max_tokens"],
             extra_meta={
                 "research_status_key": "report_conclusion",
                 "report_part": "conclusion",
@@ -2125,11 +2124,13 @@ class ResearchPipeline:
         stream: StreamBus,
         stage: str,
         iter_meta: dict[str, Any],
-        max_tokens: int = DEFAULT_BLOCK_MAX_TOKENS,
+        max_tokens: int | None = None,
         final_meta: dict[str, Any] | None = None,
         eager_sub_trace: bool = True,
     ) -> LabeledStepResult:
         """Research-flavoured thin wrapper over :func:`run_labeled_step`."""
+        if max_tokens is None:
+            max_tokens = int(self._budgets["block"]["max_tokens"])
         return await run_labeled_step(
             client=client,
             model=self.model,

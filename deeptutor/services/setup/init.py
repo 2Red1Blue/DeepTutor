@@ -10,6 +10,11 @@ from pathlib import Path
 
 import yaml
 
+from deeptutor.services.config.loader import (
+    DEFAULT_EXPLORE_CONTEXT_PARAMS,
+    DEFAULT_QUESTION_PARAMS,
+    DEFAULT_RESEARCH_PARAMS,
+)
 from deeptutor.services.path_service import get_path_service
 
 # Initialize logger for setup operations
@@ -25,6 +30,7 @@ DEFAULT_INTERFACE_SETTINGS = {
         "learnResearch": ["/question", "/solver", "/research", "/co_writer"],
     },
 }
+
 
 DEFAULT_MAIN_SETTINGS = {
     "system": {
@@ -99,6 +105,20 @@ DEFAULT_AGENTS_SETTINGS = {
         "math_animator": {"temperature": 0.4, "max_tokens": 12000},
     },
 }
+
+# Per-stage budgets are seeded from the same tables the pipelines read, so a
+# fresh agents.yaml shows every knob that governs a run and Settings can edit
+# it. Derived rather than copied: two lists of the same numbers is how a
+# default and its seed drift apart, which is the shape of #1316.
+for _capability, _stages in (
+    ("question", DEFAULT_QUESTION_PARAMS),
+    ("research", DEFAULT_RESEARCH_PARAMS),
+    ("explore_context", DEFAULT_EXPLORE_CONTEXT_PARAMS),
+):
+    _section = DEFAULT_AGENTS_SETTINGS["capabilities"].setdefault(_capability, {})
+    for _stage, _values in _stages.items():
+        _section.setdefault(_stage, dict(_values))
+del _capability, _stages, _section, _stage, _values
 
 
 def _get_setup_logger():

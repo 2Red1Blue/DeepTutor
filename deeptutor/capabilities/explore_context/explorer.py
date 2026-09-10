@@ -42,6 +42,7 @@ from deeptutor.runtime.agentic.messages import assistant_message_with_tool_calls
 from deeptutor.runtime.agentic.tool_call_stream import ToolCallAccumulator
 from deeptutor.runtime.registry.tool_registry import get_tool_registry
 from deeptutor.runtime.stream_bus import StreamBus
+from deeptutor.services.config.loader import get_capability_params
 from deeptutor.services.llm import clean_thinking_tags, get_llm_config, get_token_limit_kwargs
 from deeptutor.services.llm import stream as llm_stream
 from deeptutor.services.llm.capabilities import threads_session_id
@@ -60,14 +61,23 @@ EXPLORE_SOURCE = "chat"
 # finishes earlier by writing its investigation without a tool call. The last
 # round runs with tools disabled so it is always forced to finish.
 MAX_LOOP_ROUNDS = 5
-LOOP_MAX_TOKENS = 2000
+
+
+def _budgets() -> dict:
+    """This capability's per-stage token budgets, from agents.yaml.
+
+    Read at the call site rather than at import: a user who edits
+    ``capabilities.explore_context`` should not have to restart the process,
+    and both call sites here run once per turn at most.
+    """
+    return get_capability_params("explore_context")
+
 
 # Single-pass fallback budgets. The same sources remain reachable via
 # ``read_source`` in the loop path, so clipping here only bounds the fallback.
 MAX_SOURCES = 12
 CHARS_PER_SOURCE = 8000
 TOTAL_CHARS = 48000
-BRIEFING_MAX_TOKENS = 1400
 
 # Maps a manifest source-id prefix to a human kind label (en, zh).
 _KIND_BY_PREFIX: dict[str, tuple[str, str]] = {
@@ -278,7 +288,7 @@ class ContextExplorer:
             **build_completion_kwargs(
                 temperature=0.2,
                 model=self.model,
-                max_tokens=LOOP_MAX_TOKENS,
+                max_tokens=_budgets()["loop"]["max_tokens"],
                 binding=self.binding,
                 reasoning_effort=self.reasoning_effort,
             ),
@@ -419,7 +429,7 @@ class ContextExplorer:
                     api_version=self.api_version,
                     binding=self.binding,
                     temperature=0.2,
-                    **self._token_kwargs(BRIEFING_MAX_TOKENS),
+                    **self._token_kwargs(_budgets()["briefing"]["max_tokens"]),
                 ):
                     if not chunk:
                         continue

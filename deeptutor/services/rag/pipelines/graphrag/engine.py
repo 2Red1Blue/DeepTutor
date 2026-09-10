@@ -49,6 +49,10 @@ logger = logging.getLogger(__name__)
 # kept for tests / call sites that reference the defaults directly.
 RESPONSE_TYPE = "Multiple Paragraphs"
 DEFAULT_COMMUNITY_LEVEL = 2
+# Deliberately not in agents.yaml with the other budgets: this is the
+# reachability probe, not a generation call a reader ever sees. It asks a
+# model to prove it answers at all, and a user tuning it would only be
+# able to make the health check lie.
 PROBE_MAX_TOKENS = 1024
 PROBE_TIMEOUT_SECONDS = 25
 EMBEDDING_PROBE_TEXT = "DeepTutor GraphRAG embedding compatibility test"

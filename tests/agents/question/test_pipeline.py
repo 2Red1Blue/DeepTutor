@@ -805,15 +805,16 @@ def test_runtime_config_overrides_max_iterations_and_summarizer_tokens() -> None
 def test_runtime_config_falls_back_to_defaults_when_missing() -> None:
     """A missing / empty ``exploring`` block must not crash __init__; the
     module-level defaults take over."""
-    from deeptutor.agents.question.pipeline import (
-        DEFAULT_MAX_EXPLORE_ITERATIONS,
-        DEFAULT_TOOL_SUMMARIZER_MAX_TOKENS,
-    )
+    from deeptutor.agents.question.pipeline import DEFAULT_MAX_EXPLORE_ITERATIONS
+    from deeptutor.services.config.loader import DEFAULT_QUESTION_PARAMS
 
     pipeline = QuestionPipeline(language="en", runtime_config={})
     assert pipeline.max_explore_iterations == DEFAULT_MAX_EXPLORE_ITERATIONS
     assert pipeline.tool_summarizer_enabled is True
-    assert pipeline.tool_summarizer_max_tokens == DEFAULT_TOOL_SUMMARIZER_MAX_TOKENS
+    assert (
+        pipeline.tool_summarizer_max_tokens
+        == DEFAULT_QUESTION_PARAMS["tool_summarizer"]["max_tokens"]
+    )
 
 
 def test_build_question_runtime_config_reads_capabilities_section() -> None:
