@@ -342,6 +342,7 @@ class AgentLoop:
                     messages,
                     state,
                     reason="error",
+                    error=str(exc),
                     continued_answer_parts=continued_answer_parts,
                 )
             state.rounds += 1
@@ -627,12 +628,19 @@ class AgentLoop:
         state: AgentLoopState,
         *,
         reason: str = "budget",
+        error: str = "",
         continued_answer_parts: list[str] | None = None,
     ) -> LoopOutcome:
         if reason == "error":
+            # The caller has the exception and logs it; without it here the
+            # reader is told a step failed and never which one or why — the
+            # same silence ``tool_error_message_factory`` was built to end.
             notice = self.pipeline._t(
                 "notices.loop_error_finish",
-                default="A step failed; answering with what has been gathered.",
+                error=error,
+                default=f"A step failed ({error}); answering with what has been gathered."
+                if error
+                else "A step failed; answering with what has been gathered.",
             )
         else:
             notice = self.pipeline._t(

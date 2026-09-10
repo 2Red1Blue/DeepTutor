@@ -1114,7 +1114,14 @@ class QuestionPipeline:
         except Exception as exc:
             logger.warning("Tool summarizer failed for %s: %s", tool_name, exc)
             await stream.progress(
-                self._t("notices.tool_summarizer_failed"),
+                self._t(
+                    "notices.tool_summarizer_failed",
+                    error=str(exc),
+                    default=(
+                        f"Tool summarizer could not produce a summary ({exc}); "
+                        "passing raw tool result forward."
+                    ),
+                ),
                 source=SOURCE,
                 stage=STAGE_EXPLORING,
                 metadata=merge_trace_metadata(
