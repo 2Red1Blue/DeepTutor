@@ -25,6 +25,8 @@ import time
 from typing import Any
 import uuid
 
+from deeptutor.services.session.protocol import ActiveTurnConflict
+
 from .ask_user_trace import filter_ask_user_events
 from .event_preview import MAX_TRACE_PREVIEW_EVENTS, compact_trace_preview
 from .provider_response_state import redact_private_message_metadata
@@ -815,7 +817,10 @@ class PocketBaseSessionStore:
                 if getattr(record, "status", "") in _ACTIVE_TURN_STATUSES
             ]
             if active:
-                raise RuntimeError(f"Session already has an active turn: {active[0].turn_id}")
+                raise ActiveTurnConflict(
+                    f"Session already has an active turn: {active[0].turn_id}",
+                    turn_id=str(active[0].turn_id),
+                )
             return (
                 _pb()
                 .collection("turns")

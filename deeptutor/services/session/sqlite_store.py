@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - exercised only on Windows
     fcntl = None  # type: ignore[assignment]
 
 from deeptutor.services.path_service import get_path_service
+from deeptutor.services.session.protocol import ActiveTurnConflict
 from deeptutor.utils.secret_files import ensure_private_directory, ensure_private_file
 
 from .ask_user_trace import select_ask_user_events
@@ -859,7 +860,10 @@ class SQLiteSessionStore:
                     (session_id,),
                 ).fetchone()
                 if active is not None:
-                    raise RuntimeError(f"Session already has an active turn: {active['id']}")
+                    raise ActiveTurnConflict(
+                        f"Session already has an active turn: {active['id']}",
+                        turn_id=str(active["id"]),
+                    )
                 conn.execute(
                     """
                     INSERT INTO turns (
@@ -881,7 +885,7 @@ class SQLiteSessionStore:
         except sqlite3.IntegrityError as exc:
             # The partial unique index wins races where another process inserts
             # after our read but before our insert.
-            raise RuntimeError(f"Session already has an active turn: {session_id}") from exc
+            raise ActiveTurnConflict(f"Session already has an active turn: {session_id}") from exc
         return {
             "id": resolved_turn_id,
             "turn_id": resolved_turn_id,
