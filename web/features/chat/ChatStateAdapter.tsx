@@ -39,6 +39,7 @@ import {
   TraceCache,
   compactTracePreview,
   settleMessageTrace,
+  traceSettleAction,
   type MessageTraceMetadata,
 } from "@/features/chat/trace/memory";
 import {
@@ -1006,15 +1007,39 @@ function reducer(state: ProviderState, action: Action): ProviderState {
       // settled the message on a trace without its card.
       const session = state.sessions[action.key];
       if (!session) return state;
+      //
+      // The compaction is deferred by one turn. The turn that just finished is
+      // the one the reader is most likely to open, and trading its events for
+      // a preview means the rows they were watching a second ago have to come
+      // back from the server: the reasoning vanishes from the trace, the fetch
+      // lands, and the whole block jumps. Keeping the newest turn whole costs
+      // one turn's events and makes opening it instant; the turn before it is
+      // compacted now instead, which is what bounds the memory.
       let changed = false;
       const messages = session.messages.map((message) => {
-        if (message.id !== action.messageId || message.role !== "assistant") {
-          return message;
-        }
+        const settleAction = traceSettleAction(message, action.messageId);
+        if (settleAction === "skip") return message;
         changed = true;
+        if (settleAction === "keep") {
+          const settled = settleMessageTrace(
+            message.events ?? [],
+            action.turnId,
+          );
+          return {
+            ...message,
+            // Measured now, over the full stream, exactly as before — only the
+            // events are kept. ``truncated`` describes the preview that was
+            // not taken, so leaving it set would send the reader on a fetch
+            // for rows already in hand.
+            trace: { ...settled.trace, truncated: false },
+          };
+        }
         return {
           ...message,
-          ...settleMessageTrace(message.events ?? [], action.turnId),
+          ...settleMessageTrace(
+            message.events ?? [],
+            message.trace?.turn_id ?? "",
+          ),
         };
       });
       if (!changed) return state;
@@ -1881,6 +1906,15 @@ export function ChatStateAdapterProvider({
         (item) => item.id === messageId && item.role === "assistant",
       );
       if (!message?.trace?.turn_id) return;
+      // Already holding the whole thing — the turn that just finished keeps
+      // its events. Fetching would replace them with an identical list and
+      // repaint the trace for nothing.
+      if (
+        !message.trace.truncated &&
+        (message.events?.length ?? 0) >= (message.trace.total ?? 0)
+      ) {
+        return;
+      }
 
       const controller = new AbortController();
       traceRequestsRef.current.set(key, controller);
@@ -1906,6 +1940,16 @@ export function ChatStateAdapterProvider({
           total: page.total,
           last_seq: page.last_seq,
           truncated: false,
+          // The turn's span is measured over the whole stream and the trace
+          // pages do not carry it, so dropping it here left the duration to be
+          // re-derived from whatever events came back — and a turn that read
+          // "11s" while collapsed read "12s" the moment it was opened.
+          ...(typeof message.trace.started_at === "number"
+            ? { started_at: message.trace.started_at }
+            : {}),
+          ...(typeof message.trace.ended_at === "number"
+            ? { ended_at: message.trace.ended_at }
+            : {}),
         };
         const preview = compactTracePreview(message.events ?? []);
         const evicted = traceCacheRef.current.retain(key, {
