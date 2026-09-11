@@ -180,6 +180,13 @@ const MODE_BADGE_LABELS: Record<string, string> = {
  * Nothing below the answer can alter the working-out above it: a new round
  * would take the answer back into the process, which moves the shape.
  */
+/**
+ * The width of an ActivityRow's mark column: the 15px dot cell, the 10px gap
+ * after it, and the 2px the stack insets itself by. Pulling a row left by
+ * this lands its text on the same edge as the prose around it.
+ */
+const ROW_GUTTER = 27;
+
 function processContentKey(
   segments: MessageSegment[],
   settled: boolean,
@@ -206,6 +213,14 @@ function processContentKey(
  * followed — reading as a heading for the next paragraph instead of as the
  * step between them. Both margins are stripped and one gap governs the whole
  * column, so the rhythm is even whichever way you read it.
+ *
+ * Alignment is owned here too, for the same reason. A trace row carries its
+ * own mark column, so its text started {@link ROW_GUTTER}px right of the
+ * prose above it and the column had four left edges inside 42px — the rule,
+ * the prose, the dots, the row text. Read down it, every other line stepped
+ * sideways. The rows are pulled back by exactly that gutter instead, which
+ * leaves two edges: one content edge that prose and steps share, and the
+ * dots hanging in the margin beside it, which is what a bullet gutter is.
  *
  * Memoized on what it holds rather than on the props it is handed.
  * ``messageSegments`` is rebuilt from scratch on every streamed delta, so the
@@ -238,7 +253,12 @@ const ProcessBody = memo(
     readingMaterialRevision?: number;
   }) {
     return (
-      <div className="flex flex-col gap-3 border-l border-[var(--border)] pl-3.5">
+      <div
+        className="flex flex-col gap-3 border-l border-[var(--border)]"
+        // The padding is the content edge — where prose starts and where a
+        // row's text is pulled back to. Wide enough to hold the dots.
+        style={{ paddingLeft: ROW_GUTTER }}
+      >
         {segments.map((seg) =>
           seg.kind === "text" ? (
             <div key={seg.key} className="[&_.md-renderer>*:last-child]:mb-0">
@@ -252,7 +272,11 @@ const ProcessBody = memo(
               />
             </div>
           ) : seg.kind === "trace" ? (
-            <div key={seg.key} className="[&>div]:mb-0">
+            <div
+              key={seg.key}
+              className="[&>div]:mb-0"
+              style={{ marginLeft: -ROW_GUTTER }}
+            >
               <TraceFlow events={seg.events} isStreaming={isStreaming} />
             </div>
           ) : null,
