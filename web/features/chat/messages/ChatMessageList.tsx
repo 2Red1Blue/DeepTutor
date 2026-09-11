@@ -742,18 +742,31 @@ export const AssistantMessage = memo(function AssistantMessage({
   // layers: the process stays open and streams live, then folds itself into
   // one line the moment the turn settles into its closing answer.
   //
-  // The boundary is the trailing run of prose — the text after the last step.
-  // It is only trusted once a round has actually completed as the terminal
-  // one, because mid-turn every paragraph is briefly "trailing" and treating
-  // it as the answer would fold the process shut on every line.
-  const settledIntoAnswer =
-    !isStreaming || hasSettledFinalRound(events);
+  // The boundary is the trailing run of prose — the text after the last step —
+  // and it is structural, not timed: whatever is being written right now is
+  // always placed as the answer, from its first character.
+  //
+  // Waiting for the terminal round before promoting it is what an earlier cut
+  // did, and it meant the closing answer streamed INSIDE the collapsible
+  // process and jumped out of it once finished. That leaks a question the
+  // reader should never have been asked to hold — "is this the answer yet?" —
+  // and it is a question we cannot answer at that point anyway: a round only
+  // reveals whether it called tools after its prose is complete.
+  //
+  // Placing it optimistically inverts which case pays. Commentary is demoted
+  // into the process when its round turns out to have called a tool, and that
+  // costs one 14px slide at the exact moment the tool row appears below it —
+  // motion that reads as the two being grouped. The answer, which is the text
+  // the reader actually came for, never moves at all.
   const answerStart = useMemo(() => {
-    if (!settledIntoAnswer) return messageSegments.length;
     let idx = messageSegments.length;
     while (idx > 0 && messageSegments[idx - 1].kind === "text") idx -= 1;
     return idx;
-  }, [messageSegments, settledIntoAnswer]);
+  }, [messageSegments]);
+  // Separately: whether the working-out folds itself away. This is the one
+  // thing that does need the terminal-round signal, since it is the claim
+  // that there is no more work coming.
+  const settledIntoAnswer = !isStreaming || hasSettledFinalRound(events);
   // Cards are not process: a question the reader was asked (and answered) is
   // part of the exchange, not working-out to be folded away. So they break
   // the process into runs, each of which folds on its own.
@@ -764,10 +777,9 @@ export const AssistantMessage = memo(function AssistantMessage({
   // The leading run rides in the activity header, which is already pinned at
   // the top and already is a disclosure — giving it the process keeps the
   // message to ONE line of chrome instead of a status line plus a fold.
-  // Only the segment layout hands its process to the header. A message with
-  // nothing but prose renders through the plain body branch below, and before
-  // its first tool call every paragraph is still "process" — so without this
-  // gate a turn's opening sentence rendered twice, once in each place.
+  // Only the segment layout hands its process to the header; a message with
+  // nothing but prose renders through the plain body branch below, which would
+  // otherwise draw the same opening sentence a second time.
   const headerProcess =
     useSegmentLayout && messageBlocks[0]?.kind === "process"
       ? messageBlocks[0]
