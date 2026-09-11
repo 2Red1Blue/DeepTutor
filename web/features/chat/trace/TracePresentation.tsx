@@ -41,6 +41,7 @@ import {
   getTraceRole,
   groupTraceEvents,
   hasRenderableCallTrace as selectHasRenderableCallTrace,
+  hasSettledFinalRound,
   isChatLoopAnswerContent,
   isRetractedRound,
   isTracePending,
@@ -1493,6 +1494,7 @@ export function StreamingStatus({
   expandable = false,
   expanded = false,
   onToggle,
+  summary,
   agentName,
   showMark = true,
   traceBounds,
@@ -1511,6 +1513,8 @@ export function StreamingStatus({
   expandable?: boolean;
   expanded?: boolean;
   onToggle?: () => void;
+  // What the folded stack holds, shown while it is closed.
+  summary?: ReactNode;
   // Who is doing the thinking — partner chat passes the partner's name so
   // the status reads "Ada Exploring…" instead of the product name.
   agentName?: string;
@@ -1593,6 +1597,7 @@ export function StreamingStatus({
       expandable={expandable}
       expanded={expanded}
       onToggle={onToggle}
+      summary={summary}
       showOrb={showMark}
       className={className}
     />
@@ -1678,37 +1683,13 @@ function isChatLoopTurn(events: StreamEvent[]): boolean {
   return false;
 }
 
-/**
- * Whether the most recently *completed* round settled the turn — a tool-less
- * ``finish`` round, the one shape that ends the loop.
- *
- * Looks at only the LATEST completed round, not "has one ever appeared" —
- * a token-truncated round is explicitly non-terminal (the loop keeps
- * writing), so once ITS OWN next round completes, that round's marker
- * supersedes this one and correctly reopens the trace if fresh tool calls
- * are still coming.
- *
- * ``answer_visible`` is deliberately not consulted: it says whether a round's
- * text belongs to the answer, which is true of nearly every round and says
- * nothing about whether the turn is over.
- */
-function lastRoundSettledFinal(events: StreamEvent[]): boolean {
-  for (let idx = events.length - 1; idx >= 0; idx -= 1) {
-    const meta = getTraceMeta(events[idx]);
-    if (meta.trace_kind === "call_status" && meta.call_state === "complete") {
-      return meta.call_role === "finish";
-    }
-  }
-  return false;
-}
-
 function isFinalAnswerPhase(
   events: StreamEvent[],
   isStreaming: boolean,
   hasFinalContent: boolean,
 ): boolean {
   if (!isStreaming) return true;
-  if (lastRoundSettledFinal(events)) return true;
+  if (hasSettledFinalRound(events)) return true;
   const mode = detectStreamingMode(events, hasFinalContent, true);
   if (mode === "responding" || mode === "responded") {
     // Chat's single loop streams commentary mid-loop, which also reads as
@@ -1759,6 +1740,8 @@ export function AssistantActivity({
   onTraceToggle,
   traceBounds,
   hasStoredTrace = false,
+  processContent,
+  processSummary,
 }: {
   events: StreamEvent[];
   /**
@@ -1795,6 +1778,20 @@ export function AssistantActivity({
    * breaks that circle by letting the header open on the promise of rows.
    */
   hasStoredTrace?: boolean;
+  /**
+   * The turn's working-out, already laid out by the caller: what it said it
+   * was about to do, the steps it took, what each one turned up. Given this,
+   * the header folds THAT away rather than a bare stack of trace rows — the
+   * whole process becomes one line once the answer lands, and one click
+   * brings it back.
+   *
+   * The chat surface passes it because its process is prose interleaved with
+   * rows. Surfaces with nothing but rows pass nothing and keep the old
+   * behaviour.
+   */
+  processContent?: ReactNode;
+  /** One line naming what ``processContent`` holds, for the folded header. */
+  processSummary?: ReactNode;
 }) {
   const shownTraceEvents = traceEvents ?? events;
   const hasTrace = useMemo(
@@ -1813,8 +1810,10 @@ export function AssistantActivity({
   // rows to hand over once asked. Auto-open still follows the phase only when
   // there is something to show right now: a settled turn stays collapsed until
   // the reader asks for it.
-  const expandable = hasTrace || hasStoredTrace;
-  const open = expandable && (userOpen ?? (hasTrace && !finalPhase));
+  const hasProcess = processContent != null;
+  const expandable = hasProcess || hasTrace || hasStoredTrace;
+  const open =
+    expandable && (userOpen ?? ((hasProcess || hasTrace) && !finalPhase));
 
   // Match StreamingStatus's own null-guard — it takes ``expandable`` into
   // account for exactly this case, so both surfaces appear or neither does.
@@ -1833,6 +1832,7 @@ export function AssistantActivity({
           setUserOpen(next);
           onTraceToggle?.(next);
         }}
+        summary={processSummary}
         agentName={agentName}
         showMark={showMark}
         className={headerClassName}
@@ -1845,13 +1845,15 @@ export function AssistantActivity({
           }`}
         >
           <div className="overflow-hidden">
-            {/* The trace hangs from a faint guide line aligned under the
+            {/* The process hangs from a faint guide line aligned under the
                 header's activity mark, so it reads as "nested below" the
                 status (the elbow/tree language used elsewhere). pt-2 = gap
                 below the header when open; [&>div]:mb-0 strips
                 CallTracePanel's own bottom margin so the single gap to the
                 body comes from this block's outer ``mb-3`` in both states. */}
-            {hasTrace ? (
+            {hasProcess ? (
+              <div className="pt-2">{processContent}</div>
+            ) : hasTrace ? (
               <NestedTraceFlow
                 events={shownTraceEvents}
                 isStreaming={isStreaming}

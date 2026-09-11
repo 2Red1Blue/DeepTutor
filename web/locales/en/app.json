@@ -3690,7 +3690,6 @@
   "Notes could not be loaded.": "Notes could not be loaded.",
   "Notes could not be copied.": "Notes could not be copied.",
   "Note was not saved.": "Note was not saved.",
-  "Retry": "Retry",
   "Note saved.": "Note saved.",
   "Note was not deleted.": "Note was not deleted.",
   "Video learning panels": "Video learning panels",
@@ -4045,5 +4044,8 @@
   "The Invidious instance could not verify your account. Check the instance and reconnect.": "The Invidious instance could not verify your account. Check the instance and reconnect.",
   "Your DeepTutor login expired during authorization. Sign in, then start a new Invidious connection.": "Your DeepTutor login expired during authorization. Sign in, then start a new Invidious connection.",
   "The account could not be connected. Please start a new connection.": "The account could not be connected. Please start a new connection.",
-  "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.": "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate."
+  "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.": "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.",
+  "{{count}} tool calls": "{{count}} tool calls",
+  "{{count}} notes": "{{count}} notes",
+  "Working notes": "Working notes"
 }

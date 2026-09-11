@@ -21,6 +21,7 @@ export function ActivityHeader({
   orbSpeed = 1,
   label,
   duration,
+  summary,
   settled = false,
   expandable = false,
   expanded = false,
@@ -35,6 +36,12 @@ export function ActivityHeader({
   label: ReactNode;
   /** Elapsed time, already formatted. */
   duration?: string | null;
+  /**
+   * What the folded stack below holds ("2 tool calls"), shown only while it
+   * is closed. A line that says nothing about what it hides gives the reader
+   * no reason to open it — and once open, the rows say it better themselves.
+   */
+  summary?: ReactNode;
   /** Stop breathing the label and dim it: the work is over. */
   settled?: boolean;
   expandable?: boolean;
@@ -56,6 +63,11 @@ export function ActivityHeader({
       {duration ? (
         <span className="text-[12px] font-medium tabular-nums text-[var(--muted-foreground)]/55">
           · {duration}
+        </span>
+      ) : null}
+      {summary && expandable && !expanded ? (
+        <span className="text-[12px] font-medium text-[var(--muted-foreground)]/55">
+          · {summary}
         </span>
       ) : null}
     </>

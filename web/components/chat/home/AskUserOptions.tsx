@@ -300,6 +300,16 @@ export type MessageSegment =
    */
   | { kind: "trace"; events: StreamEvent[]; key: string };
 
+/** Every id this event answers to, for matching a row against its call. */
+function callIdsOf(event: StreamEvent): string[] {
+  const meta = (event.metadata ?? {}) as Record<string, unknown>;
+  return [
+    (event as { tool_call_id?: string }).tool_call_id,
+    typeof meta.tool_call_id === "string" ? meta.tool_call_id : undefined,
+    typeof meta.call_id === "string" ? meta.call_id : undefined,
+  ].filter((id): id is string => Boolean(id));
+}
+
 export function extractMessageSegments(
   events: StreamEvent[] | undefined,
   answerContent = "",
@@ -337,6 +347,19 @@ export function extractMessageSegments(
   // A round a capability rejected was streamed and then taken back: its text
   // is trace material, never answer text. Ordinary commentary stays.
   const retractedCallIds = collectRetractedCallIds(events);
+  // Calls the reader sees as a card. The card IS that call's presentation, so
+  // drawing an "asked you a question" row for it as well says the same thing
+  // twice — and that row lands *below* the card it produced, reading as work
+  // done after the question rather than as the asking of it.
+  // Both id fields are collected because the two sides name the call
+  // differently: a dispatched result carries ``tool_call_id`` while the trace
+  // groups rows by ``call_id``, and which one a given event has depends on the
+  // provider.
+  const cardCallIds = new Set<string>();
+  for (const event of events) {
+    if (!producesCard(event)) continue;
+    for (const id of callIdsOf(event)) cardCallIds.add(id);
+  }
 
   const ensureTextSegment = () => {
     // Text resuming closes the run of work above it, so the next tool call
@@ -352,6 +375,7 @@ export function extractMessageSegments(
 
   /** Collect one trace event into the region currently open below the text. */
   const appendTraceEvent = (event: StreamEvent) => {
+    if (callIdsOf(event).some((id) => cardCallIds.has(id))) return;
     // Where this event sat in the answer, when it recorded one. A live turn
     // records none — its text is on the wire and separates the regions by
     // itself. A reloaded one has no text events at all, so this mark is the

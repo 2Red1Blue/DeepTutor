@@ -322,6 +322,26 @@ test("a posed mastery question is its own segment, not an ask_user card", () => 
   );
 });
 
+test("the call a card renders draws no row of its own", () => {
+  // The card is that call's presentation. A row for it as well says the same
+  // thing twice, and lands below the card it produced — reading as work done
+  // after the question rather than as the asking of it.
+  const segments = extractMessageSegments([
+    event(
+      "content",
+      { call_id: "r1", call_kind: "agent_loop_round" },
+      "First, a question.",
+    ),
+    event("tool_call", { call_id: "call-1", tool_name: "ask_user" }, "ask_user"),
+    askUserCard("call-1"),
+  ]);
+
+  assert.deepEqual(
+    segments.map((segment) => segment.kind),
+    ["text", "ask_user"],
+  );
+});
+
 test("a mastery card posed on the old ask_user channel still reads as one", () => {
   // History holds cards posed before mastery questions got their own key.
   const legacy = event("tool_result", {

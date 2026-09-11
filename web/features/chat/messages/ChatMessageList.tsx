@@ -1,7 +1,15 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   BookMarked,
   BookOpen,
@@ -62,6 +70,7 @@ import {
   extractAskUserPayload,
   extractMessageSegments,
   leadingTraceEvents,
+  type MessageSegment,
 } from "@/components/chat/home/AskUserOptions";
 import { MasteryQuestionCard } from "@/components/chat/home/MasteryQuestionCard";
 import {
@@ -88,7 +97,9 @@ import ContextReferenceTree, {
 import {
   AssistantActivity,
   NestedTraceFlow,
+  TraceFlow,
 } from "@/features/chat/trace/TracePresentation";
+import { hasSettledFinalRound } from "@/features/chat/trace/selectors";
 import type { MessageTraceMetadata } from "@/features/chat/trace/memory";
 import { agentGlyph } from "@/components/agents/agent-icons";
 import { useConnectedAgentKinds } from "@/hooks/useConnectedAgentKinds";
@@ -153,6 +164,122 @@ const MODE_BADGE_LABELS: Record<string, string> = {
 // A capability with no entry is title-cased rather than printed raw: an
 // unlisted mode used to surface its internal id ("immersive_reading") in the
 // conversation, which reads as a bug to everyone who sees it.
+/**
+ * A run of working-out that folds itself away.
+ *
+ * Used for the runs that follow a card — the leading run rides in the
+ * message's activity header instead, which is already a disclosure and
+ * already pinned at the top, so the common turn shows one line of chrome
+ * rather than two.
+ */
+function ProcessFold({
+  segments,
+  settled,
+  children,
+}: {
+  segments: MessageSegment[];
+  /** The turn has moved on: fold by default, and say what is inside. */
+  settled: boolean;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? !settled;
+  const { toolCalls, notes } = summariseProcess(segments);
+  const parts = [
+    toolCalls > 0 ? t("{{count}} tool calls", { count: toolCalls }) : null,
+    notes > 0 ? t("{{count}} notes", { count: notes }) : null,
+  ].filter(Boolean);
+
+  return (
+    <div className="mb-3">
+      <button
+        type="button"
+        onClick={() => setUserOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 text-left text-[12px] font-medium text-[var(--muted-foreground)]/55 transition-colors hover:text-[var(--foreground)]"
+      >
+        <ChevronRight
+          className={`size-3 transition-transform ${open ? "rotate-90" : ""}`}
+        />
+        {parts.length ? parts.join(" · ") : t("Working notes")}
+      </button>
+      <div
+        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        }`}
+      >
+        <div className="overflow-hidden">
+          <div className="pt-1">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One row of the assistant message: a run of working-out, a card, or answer
+ * prose. Cards and the answer stand on their own; a process run is what the
+ * turn did before either of them and folds away once the turn has settled.
+ */
+type MessageBlock =
+  | { kind: "process"; key: string; segments: MessageSegment[] }
+  | { kind: "card"; key: string; segment: MessageSegment }
+  | { kind: "answer"; key: string; segment: MessageSegment };
+
+/**
+ * Split a message into its blocks.
+ *
+ * Everything before ``answerStart`` is working-out, broken at each card: a
+ * question the reader was asked is part of the exchange, so it keeps its place
+ * even when the work around it is folded.
+ */
+function buildMessageBlocks(
+  segments: MessageSegment[],
+  answerStart: number,
+): MessageBlock[] {
+  const blocks: MessageBlock[] = [];
+  let run: MessageSegment[] = [];
+  const flush = () => {
+    if (!run.length) return;
+    blocks.push({ kind: "process", key: `p-${run[0].key}`, segments: run });
+    run = [];
+  };
+  segments.slice(0, answerStart).forEach((segment) => {
+    if (segment.kind === "ask_user" || segment.kind === "mastery_question") {
+      flush();
+      blocks.push({ kind: "card", key: segment.key, segment });
+      return;
+    }
+    run.push(segment);
+  });
+  flush();
+  segments.slice(answerStart).forEach((segment) => {
+    blocks.push({ kind: "answer", key: segment.key, segment });
+  });
+  return blocks;
+}
+
+/** What a folded run of working-out holds, for the line that stands in for it. */
+function summariseProcess(segments: MessageSegment[]): {
+  toolCalls: number;
+  notes: number;
+} {
+  let toolCalls = 0;
+  let notes = 0;
+  for (const segment of segments) {
+    if (segment.kind === "text") {
+      if (segment.text.trim()) notes += 1;
+      continue;
+    }
+    if (segment.kind !== "trace") continue;
+    for (const event of segment.events) {
+      if (event.type === "tool_call") toolCalls += 1;
+    }
+  }
+  return { toolCalls, notes };
+}
+
 export function getModeBadgeLabel(capability?: string | null): string {
   if (!capability) return MODE_BADGE_LABELS.chat;
   const known = MODE_BADGE_LABELS[capability];
@@ -416,6 +543,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     questionId: string,
   ) => void | boolean | Promise<void | boolean>;
 }) {
+  const { t } = useTranslation();
   const events = useMemo(() => msg.events ?? [], [msg.events]);
   const readingMaterialId = researchRequestSnapshot?.readingMaterialId;
   const readingMaterialRevision =
@@ -614,6 +742,99 @@ export const AssistantMessage = memo(function AssistantMessage({
     [useSegmentLayout, messageSegments, events],
   );
 
+  // Where the working-out stops and the answer starts.
+  //
+  // Everything a turn writes is worth watching while it works, and almost
+  // none of it is worth re-reading afterwards. So the two are separate
+  // layers: the process stays open and streams live, then folds itself into
+  // one line the moment the turn settles into its closing answer.
+  //
+  // The boundary is the trailing run of prose — the text after the last step.
+  // It is only trusted once a round has actually completed as the terminal
+  // one, because mid-turn every paragraph is briefly "trailing" and treating
+  // it as the answer would fold the process shut on every line.
+  const settledIntoAnswer =
+    !isStreaming || hasSettledFinalRound(events);
+  const answerStart = useMemo(() => {
+    if (!settledIntoAnswer) return messageSegments.length;
+    let idx = messageSegments.length;
+    while (idx > 0 && messageSegments[idx - 1].kind === "text") idx -= 1;
+    return idx;
+  }, [messageSegments, settledIntoAnswer]);
+  // Cards are not process: a question the reader was asked (and answered) is
+  // part of the exchange, not working-out to be folded away. So they break
+  // the process into runs, each of which folds on its own.
+  const messageBlocks = useMemo(
+    () => buildMessageBlocks(messageSegments, answerStart),
+    [messageSegments, answerStart],
+  );
+  // The leading run rides in the activity header, which is already pinned at
+  // the top and already is a disclosure — giving it the process keeps the
+  // message to ONE line of chrome instead of a status line plus a fold.
+  // Only the segment layout hands its process to the header. A message with
+  // nothing but prose renders through the plain body branch below, and before
+  // its first tool call every paragraph is still "process" — so without this
+  // gate a turn's opening sentence rendered twice, once in each place.
+  const headerProcess =
+    useSegmentLayout && messageBlocks[0]?.kind === "process"
+      ? messageBlocks[0]
+      : null;
+  const bodyBlocks = headerProcess ? messageBlocks.slice(1) : messageBlocks;
+
+  /**
+   * Prose and the steps it introduced, in the order they were written.
+   *
+   * Spacing is owned here rather than left to each piece. Markdown carries a
+   * bottom margin and the trace rows carried only a top one, so a row sat 24px
+   * below the sentence that introduced it and flush against the one that
+   * followed — reading as a heading for the next paragraph instead of as the
+   * step between them. Both margins are stripped and one gap governs the
+   * whole column, so the rhythm is even whichever way you read it.
+   */
+  const renderSegments = useCallback(
+    (segments: MessageSegment[]) => (
+      <div className="flex flex-col gap-3 border-l border-[var(--border)] pl-3.5">
+        {segments.map((seg) =>
+          seg.kind === "text" ? (
+            <div
+              key={seg.key}
+              className="[&_.md-renderer>*:last-child]:mb-0"
+            >
+              <AssistantResponse
+                content={seg.text}
+                language={language}
+                isStreaming={isStreaming}
+                readingMaterialId={readingMaterialId}
+                readingMaterialRevision={readingMaterialRevision}
+                events={events}
+              />
+            </div>
+          ) : seg.kind === "trace" ? (
+            <div key={seg.key} className="[&>div]:mb-0">
+              <TraceFlow events={seg.events} isStreaming={isStreaming} />
+            </div>
+          ) : null,
+        )}
+      </div>
+    ),
+    [
+      language,
+      isStreaming,
+      readingMaterialId,
+      readingMaterialRevision,
+      events,
+    ],
+  );
+  const headerProcessSummary = useMemo(() => {
+    if (!headerProcess) return undefined;
+    const { toolCalls, notes } = summariseProcess(headerProcess.segments);
+    const parts = [
+      toolCalls > 0 ? t("{{count}} tool calls", { count: toolCalls }) : null,
+      notes > 0 ? t("{{count}} notes", { count: notes }) : null,
+    ].filter(Boolean);
+    return parts.length ? parts.join(" · ") : undefined;
+  }, [headerProcess, t]);
+
   const researchInProgress =
     outlineStatus === "researching" ||
     outlineStatus === "done" ||
@@ -650,6 +871,13 @@ export const AssistantMessage = memo(function AssistantMessage({
             ? (open) => onTraceToggle?.(open)
             : undefined
         }
+        // The turn's working-out, folded behind this same header. One line of
+        // chrome does both jobs: it says what is happening while the turn runs
+        // and, once it settles, what it did on the way to the answer.
+        processContent={
+          headerProcess ? renderSegments(headerProcess.segments) : undefined
+        }
+        processSummary={headerProcessSummary}
       />
       {outlinePreview && outlinePreview.sub_topics.length > 0 ? (
         <>
@@ -726,39 +954,42 @@ export const AssistantMessage = memo(function AssistantMessage({
           />
         </>
       ) : useSegmentLayout ? (
-        // Default chat surface: render text, tool work and cards in the exact
-        // order they were streamed. The sentence that introduced a step sits
-        // above it and whatever the next round said sits below, so the message
-        // reads as a running account rather than an answer with its working
-        // hidden in a block at the top.
-        messageSegments.map((seg) =>
-          seg.kind === "text" ? (
+        // Default chat surface. The working-out (prose interleaved with the
+        // steps it introduced) is one layer, folded once the turn settles; the
+        // closing answer is the other and always stands plain. Cards sit
+        // between them at the point they were asked.
+        bodyBlocks.map((block) =>
+          block.kind === "process" ? (
+            <ProcessFold
+              key={block.key}
+              segments={block.segments}
+              settled={settledIntoAnswer}
+            >
+              {renderSegments(block.segments)}
+            </ProcessFold>
+          ) : block.kind === "card" ? (
+            block.segment.kind === "mastery_question" ? (
+              <div key={block.key}>
+                {renderMasteryCard(block.segment.question)}
+              </div>
+            ) : block.segment.kind === "ask_user" ? (
+              <AskUserOptions
+                key={block.key}
+                data={block.segment.data}
+                onSubmit={submitReply}
+              />
+            ) : null
+          ) : block.segment.kind === "text" ? (
             <AssistantResponse
-              key={seg.key}
-              content={seg.text}
+              key={block.key}
+              content={block.segment.text}
               language={language}
               isStreaming={isStreaming}
               readingMaterialId={readingMaterialId}
               readingMaterialRevision={readingMaterialRevision}
               events={events}
             />
-          ) : seg.kind === "trace" ? (
-            // One run of work, shown where it happened — between the text
-            // that introduced it and the text that followed.
-            <NestedTraceFlow
-              key={seg.key}
-              events={seg.events}
-              isStreaming={isStreaming}
-            />
-          ) : seg.kind === "mastery_question" ? (
-            <div key={seg.key}>{renderMasteryCard(seg.question)}</div>
-          ) : (
-            <AskUserOptions
-              key={seg.key}
-              data={seg.data}
-              onSubmit={submitReply}
-            />
-          ),
+          ) : null,
         )
       ) : (
         <AssistantResponse

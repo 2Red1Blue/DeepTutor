@@ -3690,7 +3690,6 @@
   "Notes could not be loaded.": "无法加载笔记。",
   "Notes could not be copied.": "无法复制笔记。",
   "Note was not saved.": "笔记未保存。",
-  "Retry": "重试",
   "Note saved.": "笔记已保存。",
   "Note was not deleted.": "笔记未删除。",
   "Video learning panels": "视频学习面板",
@@ -4045,5 +4044,8 @@
   "The Invidious instance could not verify your account. Check the instance and reconnect.": "Invidious 实例暂时无法验证账号，请检查实例后重新关联。",
   "Your DeepTutor login expired during authorization. Sign in, then start a new Invidious connection.": "授权期间 DeepTutor 登录已失效，请先登录 DeepTutor，再重新关联 Invidious。",
   "The account could not be connected. Please start a new connection.": "账号关联失败，请重新发起关联。",
-  "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.": "请使用 Invidious 账号登录，确认只读授权后会自动返回此页。DeepTutor 与 Invidious 使用各自的登录账号。"
+  "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.": "请使用 Invidious 账号登录，确认只读授权后会自动返回此页。DeepTutor 与 Invidious 使用各自的登录账号。",
+  "{{count}} tool calls": "{{count}} 次工具调用",
+  "{{count}} notes": "{{count}} 条说明",
+  "Working notes": "过程记录"
 }
