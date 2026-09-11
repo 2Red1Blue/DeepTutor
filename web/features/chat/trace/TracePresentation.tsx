@@ -16,6 +16,7 @@ import type { StreamEvent } from "@/features/chat/model/protocol";
 import {
   ActivityDetailGrid,
   ActivityDivider,
+  ActivityFold,
   ActivityHeader,
   ActivityRow,
   ActivityStack,
@@ -1839,30 +1840,25 @@ export function AssistantActivity({
         traceBounds={traceBounds}
       />
       {expandable ? (
-        <div
-          className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-            open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-          }`}
-        >
-          <div className="overflow-hidden">
-            {/* The process hangs from a faint guide line aligned under the
-                header's activity mark, so it reads as "nested below" the
-                status (the elbow/tree language used elsewhere). pt-2 = gap
-                below the header when open; [&>div]:mb-0 strips
-                CallTracePanel's own bottom margin so the single gap to the
-                body comes from this block's outer ``mb-3`` in both states. */}
-            {hasProcess ? (
-              <div className="pt-2">{processContent}</div>
-            ) : hasTrace ? (
-              <NestedTraceFlow
-                events={shownTraceEvents}
-                isStreaming={isStreaming}
-              />
-            ) : (
-              <TraceLoadingRow />
-            )}
-          </div>
-        </div>
+        <ActivityFold open={open}>
+          {/* The process hangs from a faint guide line on the header's own
+              left edge — where the activity mark sits — with its content
+              indented past it, so the working-out reads as nested inside the
+              turn while the answer below stays at the top level. pt-2 = gap
+              below the header when open; [&>div]:mb-0 strips CallTracePanel's
+              own bottom margin so the single gap to the body comes from this
+              block's outer ``mb-3`` in both states. */}
+          {hasProcess ? (
+            <div className="pt-2">{processContent}</div>
+          ) : hasTrace ? (
+            <NestedTraceFlow
+              events={shownTraceEvents}
+              isStreaming={isStreaming}
+            />
+          ) : (
+            <TraceLoadingRow />
+          )}
+        </ActivityFold>
       ) : null}
     </div>
   );

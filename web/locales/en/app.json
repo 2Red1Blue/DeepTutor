@@ -4046,6 +4046,5 @@
   "The account could not be connected. Please start a new connection.": "The account could not be connected. Please start a new connection.",
   "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.": "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.",
   "{{count}} tool calls": "{{count}} tool calls",
-  "{{count}} notes": "{{count}} notes",
   "Working notes": "Working notes"
 }

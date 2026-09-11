@@ -37,6 +37,7 @@ import {
 import { useTranslation } from "react-i18next";
 import type { SelectedHistorySession } from "@/components/chat/HistorySessionPicker";
 import type { SelectedQuestionEntry } from "@/components/chat/QuestionBankPicker";
+import { ActivityFold, FoldCaret } from "@/components/activity";
 import AssistantResponse from "@/components/common/AssistantResponse";
 import {
   InlineFileCardProvider,
@@ -185,34 +186,28 @@ function ProcessFold({
   const { t } = useTranslation();
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const open = userOpen ?? !settled;
-  const { toolCalls, notes } = summariseProcess(segments);
-  const parts = [
-    toolCalls > 0 ? t("{{count}} tool calls", { count: toolCalls }) : null,
-    notes > 0 ? t("{{count}} notes", { count: notes }) : null,
-  ].filter(Boolean);
+  const toolCalls = countProcessToolCalls(segments);
 
   return (
     <div className="mb-3">
+      {/* Same shape as the activity header this fold echoes: the label first,
+          the caret after it. The header has an orb holding the left column,
+          so a leading caret here would make the two controls read as two
+          different kinds of thing. */}
       <button
         type="button"
         onClick={() => setUserOpen(!open)}
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 text-left text-[12px] font-medium text-[var(--muted-foreground)]/55 transition-colors hover:text-[var(--foreground)]"
+        className="group/act flex items-center gap-2 text-left text-[12px] font-medium text-[var(--muted-foreground)]/55 transition-colors hover:text-[var(--foreground)]"
       >
-        <ChevronRight
-          className={`size-3 transition-transform ${open ? "rotate-90" : ""}`}
-        />
-        {parts.length ? parts.join(" · ") : t("Working notes")}
+        {toolCalls > 0
+          ? t("{{count}} tool calls", { count: toolCalls })
+          : t("Working notes")}
+        <FoldCaret open={open} />
       </button>
-      <div
-        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-        }`}
-      >
-        <div className="overflow-hidden">
-          <div className="pt-1">{children}</div>
-        </div>
-      </div>
+      <ActivityFold open={open}>
+        <div className="pt-1">{children}</div>
+      </ActivityFold>
     </div>
   );
 }
@@ -260,24 +255,22 @@ function buildMessageBlocks(
   return blocks;
 }
 
-/** What a folded run of working-out holds, for the line that stands in for it. */
-function summariseProcess(segments: MessageSegment[]): {
-  toolCalls: number;
-  notes: number;
-} {
+/**
+ * How many steps a run of working-out took, for the line that names it.
+ *
+ * Steps only. Counting the paragraphs of commentary alongside them read as a
+ * measure of how much was said rather than how much was done, which is the
+ * thing a reader is deciding whether to open.
+ */
+function countProcessToolCalls(segments: MessageSegment[]): number {
   let toolCalls = 0;
-  let notes = 0;
   for (const segment of segments) {
-    if (segment.kind === "text") {
-      if (segment.text.trim()) notes += 1;
-      continue;
-    }
     if (segment.kind !== "trace") continue;
     for (const event of segment.events) {
       if (event.type === "tool_call") toolCalls += 1;
     }
   }
-  return { toolCalls, notes };
+  return toolCalls;
 }
 
 export function getModeBadgeLabel(capability?: string | null): string {
@@ -827,12 +820,10 @@ export const AssistantMessage = memo(function AssistantMessage({
   );
   const headerProcessSummary = useMemo(() => {
     if (!headerProcess) return undefined;
-    const { toolCalls, notes } = summariseProcess(headerProcess.segments);
-    const parts = [
-      toolCalls > 0 ? t("{{count}} tool calls", { count: toolCalls }) : null,
-      notes > 0 ? t("{{count}} notes", { count: notes }) : null,
-    ].filter(Boolean);
-    return parts.length ? parts.join(" · ") : undefined;
+    const toolCalls = countProcessToolCalls(headerProcess.segments);
+    return toolCalls > 0
+      ? t("{{count}} tool calls", { count: toolCalls })
+      : undefined;
   }, [headerProcess, t]);
 
   const researchInProgress =
