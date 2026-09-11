@@ -127,6 +127,7 @@ const VisualizationViewer = dynamic(
   { ssr: false },
 );
 
+
 interface ChatMessageItem {
   id?: number;
   role: "user" | "assistant" | "system";
@@ -165,6 +166,110 @@ const MODE_BADGE_LABELS: Record<string, string> = {
 // A capability with no entry is title-cased rather than printed raw: an
 // unlisted mode used to surface its internal id ("immersive_reading") in the
 // conversation, which reads as a bug to everyone who sees it.
+/**
+ * What a run of working-out actually contains, for the memo below.
+ *
+ * Prose is identified by its length rather than its text because a streamed
+ * segment only ever grows; a run of steps by how many events it holds.
+ *
+ * ``settled`` says a turn has moved on to writing its answer, and then only
+ * the shape matters. The region a turn is working in stays open in the event
+ * stream and keeps absorbing everything that arrives, so a finished run of
+ * steps went on counting the answer's own deltas — 3300 events for a trace
+ * drawing two rows — and reported itself as changed on every one of them.
+ * Nothing below the answer can alter the working-out above it: a new round
+ * would take the answer back into the process, which moves the shape.
+ */
+function processContentKey(
+  segments: MessageSegment[],
+  settled: boolean,
+): string {
+  return segments
+    .map((seg) =>
+      settled
+        ? seg.key
+        : seg.kind === "text"
+          ? `t${seg.key}:${seg.text.length}`
+          : seg.kind === "trace"
+            ? `r${seg.key}:${seg.events.length}`
+            : seg.key,
+    )
+    .join("|");
+}
+
+/**
+ * Prose and the steps it introduced, in the order they were written.
+ *
+ * Spacing is owned here rather than left to each piece. Markdown carries a
+ * bottom margin and the trace rows carried only a top one, so a row sat 24px
+ * below the sentence that introduced it and flush against the one that
+ * followed — reading as a heading for the next paragraph instead of as the
+ * step between them. Both margins are stripped and one gap governs the whole
+ * column, so the rhythm is even whichever way you read it.
+ *
+ * Memoized on what it holds rather than on the props it is handed.
+ * ``messageSegments`` is rebuilt from scratch on every streamed delta, so the
+ * working-out — which stops changing the moment a turn starts writing its
+ * answer — arrived as a brand-new element tree on every frame of that answer.
+ * React cannot skip a subtree whose elements it has never seen, so the whole
+ * trace re-rendered for the answer's full length: profiled over one 35s turn,
+ * 2905 renders costing 10.3s, none of which changed a pixel.
+ *
+ * ``events`` is deliberately left out of the comparison. It is read only to
+ * verify reading-material locators, and anything that could verify one is a
+ * tool call — which lands in a run of steps and moves the key on its own.
+ */
+const ProcessBody = memo(
+  function ProcessBody({
+    segments,
+    events,
+    language,
+    isStreaming,
+    readingMaterialId,
+    readingMaterialRevision,
+  }: {
+    segments: MessageSegment[];
+    events: StreamEvent[];
+    /** The turn has moved on to its answer, so this run is finished. */
+    settled: boolean;
+    language?: string;
+    isStreaming?: boolean;
+    readingMaterialId?: string;
+    readingMaterialRevision?: number;
+  }) {
+    return (
+      <div className="flex flex-col gap-3 border-l border-[var(--border)] pl-3.5">
+        {segments.map((seg) =>
+          seg.kind === "text" ? (
+            <div key={seg.key} className="[&_.md-renderer>*:last-child]:mb-0">
+              <AssistantResponse
+                content={seg.text}
+                language={language}
+                isStreaming={isStreaming}
+                readingMaterialId={readingMaterialId}
+                readingMaterialRevision={readingMaterialRevision}
+                events={events}
+              />
+            </div>
+          ) : seg.kind === "trace" ? (
+            <div key={seg.key} className="[&>div]:mb-0">
+              <TraceFlow events={seg.events} isStreaming={isStreaming} />
+            </div>
+          ) : null,
+        )}
+      </div>
+    );
+  },
+  (a, b) =>
+    a.language === b.language &&
+    a.isStreaming === b.isStreaming &&
+    a.settled === b.settled &&
+    a.readingMaterialId === b.readingMaterialId &&
+    a.readingMaterialRevision === b.readingMaterialRevision &&
+    processContentKey(a.segments, a.settled) ===
+      processContentKey(b.segments, b.settled),
+);
+
 /**
  * A run of working-out that folds itself away.
  *
@@ -496,7 +601,9 @@ export const AssistantMessage = memo(function AssistantMessage({
   sessionId?: string | null;
   language?: string;
   researchRequestSnapshot?: MessageRequestSnapshot | null;
-  onTraceToggle?: (open: boolean) => void;
+  /** Notified when a persisted trace is opened or collapsed. Takes the id so
+   *  the list can hand one callback to every row — see ``handleTraceToggle``. */
+  onTraceToggle?: (messageId: number, open: boolean) => void;
   onConfirmOutline?: (
     outline: Array<{ title: string; overview: string }>,
     topic: string,
@@ -763,9 +870,14 @@ export const AssistantMessage = memo(function AssistantMessage({
     while (idx > 0 && messageSegments[idx - 1].kind === "text") idx -= 1;
     return idx;
   }, [messageSegments]);
-  // Separately: whether the working-out folds itself away. This is the one
-  // thing that does need the terminal-round signal, since it is the claim
-  // that there is no more work coming.
+  // A turn that has started writing its answer is no longer changing the
+  // working-out above it, which is what lets that whole subtree stop
+  // re-deriving itself on every delta. Structural, like the boundary: if a new
+  // round starts, the answer goes back into the process and this goes false.
+  const processSettled = answerStart < messageSegments.length;
+  // Separately again: whether the working-out folds itself away. This is the
+  // one thing that does need the terminal-round signal, since it is the claim
+  // that there is no more work coming at all.
   const settledIntoAnswer = !isStreaming || hasSettledFinalRound(events);
   // Cards are not process: a question the reader was asked (and answered) is
   // part of the exchange, not working-out to be folded away. So they break
@@ -786,41 +898,17 @@ export const AssistantMessage = memo(function AssistantMessage({
       : null;
   const bodyBlocks = headerProcess ? messageBlocks.slice(1) : messageBlocks;
 
-  /**
-   * Prose and the steps it introduced, in the order they were written.
-   *
-   * Spacing is owned here rather than left to each piece. Markdown carries a
-   * bottom margin and the trace rows carried only a top one, so a row sat 24px
-   * below the sentence that introduced it and flush against the one that
-   * followed — reading as a heading for the next paragraph instead of as the
-   * step between them. Both margins are stripped and one gap governs the
-   * whole column, so the rhythm is even whichever way you read it.
-   */
   const renderSegments = useCallback(
     (segments: MessageSegment[]) => (
-      <div className="flex flex-col gap-3 border-l border-[var(--border)] pl-3.5">
-        {segments.map((seg) =>
-          seg.kind === "text" ? (
-            <div
-              key={seg.key}
-              className="[&_.md-renderer>*:last-child]:mb-0"
-            >
-              <AssistantResponse
-                content={seg.text}
-                language={language}
-                isStreaming={isStreaming}
-                readingMaterialId={readingMaterialId}
-                readingMaterialRevision={readingMaterialRevision}
-                events={events}
-              />
-            </div>
-          ) : seg.kind === "trace" ? (
-            <div key={seg.key} className="[&>div]:mb-0">
-              <TraceFlow events={seg.events} isStreaming={isStreaming} />
-            </div>
-          ) : null,
-        )}
-      </div>
+      <ProcessBody
+        segments={segments}
+        events={events}
+        settled={processSettled}
+        language={language}
+        isStreaming={isStreaming}
+        readingMaterialId={readingMaterialId}
+        readingMaterialRevision={readingMaterialRevision}
+      />
     ),
     [
       language,
@@ -828,6 +916,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       readingMaterialId,
       readingMaterialRevision,
       events,
+      processSettled,
     ],
   );
   const headerProcessSummary = useMemo(() => {
@@ -871,7 +960,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         className="mb-3"
         onTraceToggle={
           msg.id != null && msg.trace?.turn_id
-            ? (open) => onTraceToggle?.(open)
+            ? (open) => onTraceToggle?.(msg.id as number, open)
             : undefined
         }
         // The turn's working-out, folded behind this same header. One line of
@@ -1790,6 +1879,21 @@ export const ChatMessageList = memo(function ChatMessageList({
   //
   // The followup is dropped from the visible row list so only the
   // merged bubble renders.
+  // One callback for every row rather than a closure per row per render.
+  // ``AssistantMessage`` is memoized, and a fresh function defeats that
+  // outright: every message in the conversation re-rendered on every streamed
+  // delta of the turn at the bottom.
+  const handleTraceToggle = useCallback(
+    (messageId: number, open: boolean) => {
+      if (open) {
+        void onLoadMessageTrace?.(messageId);
+      } else {
+        onReleaseMessageTrace?.(messageId);
+      }
+    },
+    [onLoadMessageTrace, onReleaseMessageTrace],
+  );
+
   const deepResearchMergeMap = useMemo(() => {
     const map = new Map<
       number,
@@ -2025,14 +2129,7 @@ export const ChatMessageList = memo(function ChatMessageList({
                 researchRequestSnapshot={
                   pairedUserMessage?.requestSnapshot ?? null
                 }
-                onTraceToggle={(open) => {
-                  if (msg.id == null) return;
-                  if (open) {
-                    void onLoadMessageTrace?.(msg.id);
-                  } else {
-                    onReleaseMessageTrace?.(msg.id);
-                  }
-                }}
+                onTraceToggle={handleTraceToggle}
                 masteryGrades={masteryGrades}
                 masterySkips={masterySkips}
               />
