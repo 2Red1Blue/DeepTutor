@@ -13,8 +13,10 @@ Event → IM mapping:
   text (the loop's RESULT is empty for an unresolved ask_user pause — the
   pending question IS the reply, and the user's next IM message simply
   starts the next turn)
-* trace-only narration rounds (``call_role=narration``) → optional
-  ``_progress`` messages (``send_progress`` channel flag)
+* mid-turn commentary rounds (``call_role=narration``) → live ``_progress``
+  messages on a channel that carries them (``send_progress`` flag), and
+  otherwise a prefix of the closing reply, so the reader gets the running
+  commentary either way
 * ``TOOL_CALL``                                  → optional ``_tool_hint``
 """
 
@@ -500,19 +502,29 @@ class PartnerRunner:
                                 call_id = str(meta.get("call_id") or "")
                                 raw_text = "".join(round_buffers.pop(call_id, []))
                                 text = raw_text.strip()
-                                if meta.get("answer_visible") is True:
-                                    if raw_text:
-                                        answer_visible_parts.append(raw_text)
-                                    if call_id in streamed_rounds:
-                                        ended_rounds.add(call_id)
-                                        await self._publish_stream_end(msg, turn_id, call_id)
-                                    continue
                                 if call_id in streamed_rounds:
                                     # Already streamed live — freeze the segment.
                                     ended_rounds.add(call_id)
                                     await self._publish_stream_end(msg, turn_id, call_id)
-                                elif is_im and send_progress and text:
+                                elif meta.get("answer_visible") is False:
+                                    # A capability retracted this round; it was
+                                    # never the reader's to see.
+                                    pass
+                                elif not is_im:
+                                    # The web surface renders each round itself,
+                                    # in place. Folding the text into the reply
+                                    # as well would show it twice.
+                                    pass
+                                elif send_progress and text:
+                                    # This channel carries commentary live, so
+                                    # the reader already has it and the closing
+                                    # reply must not repeat it.
                                     await self._publish_hint(msg, text, tool_hint=False)
+                                elif raw_text:
+                                    # Nothing carried it live. Keep it for the
+                                    # closing reply so the reader still gets the
+                                    # running commentary, in the order written.
+                                    answer_visible_parts.append(raw_text)
 
                         elif event.type == StreamEventType.RESULT and event.source == "chat":
                             final_text = str(meta.get("response") or "")

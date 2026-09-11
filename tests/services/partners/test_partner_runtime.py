@@ -36,6 +36,11 @@ def _msg(content: str = "hello", channel: str = "telegram") -> InboundMessage:
     return InboundMessage(channel=channel, sender_id="42", chat_id="42", content=content)
 
 
+def _muted_progress_config() -> PartnerConfig:
+    """A partner whose telegram channel carries no live progress messages."""
+    return PartnerConfig(name="Ada", channels={"telegram": {"sendProgress": False}})
+
+
 class TestTurnExecution:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("channel", ["weixin", "telegram"])
@@ -177,11 +182,35 @@ class TestTurnExecution:
         assert progress.metadata["_tool_hint"] is False
 
     @pytest.mark.asyncio
-    async def test_answer_visible_narration_stays_in_reply(self, partners_root, fake_orchestrator):
+    async def test_commentary_reaches_a_progress_channel_live_not_twice(
+        self, partners_root, fake_orchestrator
+    ):
+        """Commentary is the reader's either way — once, by the fastest route.
+
+        A channel that carries progress shows each round as it lands, so the
+        closing reply must not repeat it.
+        """
         fake_orchestrator.script = answer_visible_narration(
             "c1", "Great job on that answer."
         ) + finish("Choose the next topic.")
         runner = _runner(partners_root)
+
+        final = await runner.process_message(_msg())
+
+        progress = await runner.bus.outbound.get()
+        assert progress.content == "Great job on that answer."
+        assert progress.metadata["_progress"] is True
+        assert final == "Choose the next topic."
+
+    @pytest.mark.asyncio
+    async def test_commentary_rides_the_reply_when_no_channel_carries_it(
+        self, partners_root, fake_orchestrator
+    ):
+        """With progress muted, the reply is the only route left — so it carries it."""
+        fake_orchestrator.script = answer_visible_narration(
+            "c1", "Great job on that answer."
+        ) + finish("Choose the next topic.")
+        runner = _runner(partners_root, _muted_progress_config())
 
         final = await runner.process_message(_msg())
 
@@ -208,7 +237,7 @@ class TestTurnExecution:
                 metadata={"response": "Part one. Part two."},
             ),
         ]
-        runner = _runner(partners_root)
+        runner = _runner(partners_root, _muted_progress_config())
 
         final = await runner.process_message(_msg())
 

@@ -13,9 +13,10 @@ import {
   type MasteryQuestion,
 } from "@/lib/mastery-question";
 import {
-  collectNarrationCallIds,
+  collectRetractedCallIds,
   shouldAppendEventContent,
 } from "@/lib/stream";
+import { hasRenderableCallTrace } from "@/features/chat/trace/selectors";
 import type { StreamEvent } from "@/features/chat/model/protocol";
 
 /**
@@ -289,12 +290,13 @@ export type MessageSegment =
       key: string;
     }
   /**
-   * The trace of the round(s) that ran AFTER a card — the reasoning the
-   * resumed turn produced once the user answered. It renders below the
-   * card it followed, because the message's activity block is pinned to
-   * the top: everything emitted after a submit used to land back up
-   * there, above content the user had already scrolled past, so the
-   * turn looked frozen after they picked an option.
+   * One run of work — tool calls, their results, the reasoning around them —
+   * rendered exactly where it happened, between the text that introduced it
+   * and the text that followed. This is what makes the message read like a
+   * terminal agent: say what you are about to do, do it, say what came of it.
+   *
+   * A region opens as soon as trace events arrive after some answer text, and
+   * closes when the next text run starts.
    */
   | { kind: "trace"; events: StreamEvent[]; key: string };
 
@@ -331,14 +333,15 @@ export function extractMessageSegments(
   let anonymousDraftIdx: number | null = null;
   let pendingTextIdx: number | null = null;
   let pendingTraceIdx: number | null = null;
-  let sawAskUser = false;
   let seq = 0;
-  // Narration rounds (chat-loop preamble alongside a tool call) stream as
-  // content but belong in the trace, not the answer — keep them out of the
-  // inline text segments too.
-  const narrationCallIds = collectNarrationCallIds(events);
+  // A round a capability rejected was streamed and then taken back: its text
+  // is trace material, never answer text. Ordinary commentary stays.
+  const retractedCallIds = collectRetractedCallIds(events);
 
   const ensureTextSegment = () => {
+    // Text resuming closes the run of work above it, so the next tool call
+    // opens a region of its own below this paragraph rather than joining the
+    // one the reader has already scrolled past.
     pendingTraceIdx = null;
     if (pendingTextIdx === null) {
       pendingTextIdx = segments.length;
@@ -347,21 +350,44 @@ export function extractMessageSegments(
     return pendingTextIdx;
   };
 
-  /** Collect one post-card trace event; a no-op before the first card. */
+  /** Collect one trace event into the region currently open below the text. */
   const appendTraceEvent = (event: StreamEvent) => {
-    if (!sawAskUser) return;
+    // Where this event sat in the answer, when it recorded one. A live turn
+    // records none — its text is on the wire and separates the regions by
+    // itself. A reloaded one has no text events at all, so this mark is the
+    // only thing that still says which paragraph a row belonged under.
+    const raw = ((event.metadata ?? {}) as Record<string, unknown>)
+      .assistant_content_offset;
+    const offset = typeof raw === "number" ? raw : null;
+    if (pendingTraceIdx !== null && offset !== null) {
+      const open = answerOffsets.get(pendingTraceIdx);
+      // Two calls made at different points in the answer are two runs of work
+      // with prose between them, even though the preview dropped that prose.
+      // Without this they collapsed into one block and the reloaded turn
+      // stopped resembling the one the reader had watched.
+      if (open !== undefined && open !== offset) pendingTraceIdx = null;
+    }
     if (pendingTraceIdx === null) {
+      // Work starting closes the paragraph above it, so what the next round
+      // writes lands in a new run *below* this region rather than being
+      // appended to text the reader has already passed.
+      pendingTextIdx = null;
       pendingTraceIdx = segments.length;
       segments.push({ kind: "trace", events: [], key: `r${seq++}` });
     }
     const seg = segments[pendingTraceIdx];
     if (seg.kind === "trace") seg.events.push(event);
+    // Read from the first event in the region that recorded a mark — a region
+    // often opens on a status marker, which carries none.
+    if (offset !== null && !answerOffsets.has(pendingTraceIdx)) {
+      answerOffsets.set(pendingTraceIdx, offset);
+    }
   };
 
   for (const event of events) {
     if (shouldAppendEventContent(event)) {
       const callId = ((event.metadata ?? {}) as { call_id?: string }).call_id;
-      if (callId && narrationCallIds.has(callId)) {
+      if (callId && retractedCallIds.has(callId)) {
         appendTraceEvent(event);
         continue;
       }
@@ -379,12 +405,10 @@ export function extractMessageSegments(
         const cardKey = `mastery:${posed.questionId}`;
         if (seenAskUserCards.has(cardKey)) continue;
         seenAskUserCards.add(cardKey);
-        // Same bookkeeping as a card below: close the text run so the round's
-        // remaining prose starts fresh underneath, and open the post-card
-        // trace region.
+        // Same bookkeeping as a card below: close the text and trace runs so
+        // the round's remaining prose starts fresh underneath the card.
         pendingTextIdx = null;
         pendingTraceIdx = null;
-        sawAskUser = true;
         const masteryIdx = segments.length;
         segments.push({
           kind: "mastery_question",
@@ -422,7 +446,6 @@ export function extractMessageSegments(
       // emits starts fresh segments below this card.
       pendingTextIdx = null;
       pendingTraceIdx = null;
-      sawAskUser = true;
       // This call was previewed while it streamed: promote that card rather
       // than appending a second one. Keeping the segment's key keeps the
       // rendered card mounted, so the picked-option state and scroll
@@ -483,12 +506,9 @@ export function extractMessageSegments(
         continue;
       }
       pendingTextIdx = null;
-      // Deliberately *not* setting ``sawAskUser``: the trace events that
-      // belong to this very call are still ahead of us in the stream, and
-      // ``leadingTraceEvents`` renders them above the bubble. Opening the
-      // post-card trace run here showed them a second time *below* the card
-      // — so the call's own "asking you" step read as happening after the
-      // question it produced. The dispatched result below owns that switch.
+      // Deliberately leaving the trace region open: the events that belong to
+      // this very call are still ahead of us in the stream, and they read as
+      // the work that produced the question — above it, not below.
       const idx = segments.length;
       segments.push({
         kind: "ask_user",
@@ -570,48 +590,62 @@ export function extractMessageSegments(
     appendTraceEvent(event);
   }
 
-  // The turn is over: a preview still marked streaming never became a
-  // dispatched call (a duplicate parallel ask_user, a guard that rejected the
-  // arguments), so there is nothing behind it to answer. Dropping it shifts
-  // the segment indices ``answerOffsets`` is keyed by, so both are rebuilt
-  // together.
-  let kept = segments;
-  let keptOffsets = answerOffsets;
-  if (!streaming && segments.some((s) => s.kind === "ask_user" && s.data.streaming)) {
-    kept = [];
-    keptOffsets = new Map<number, number>();
-    segments.forEach((segment, idx) => {
-      if (segment.kind === "ask_user" && segment.data.streaming) return;
-      const offset = answerOffsets.get(idx);
-      if (offset !== undefined) keptOffsets.set(kept.length, offset);
-      kept.push(segment);
-    });
-  }
+  // Two kinds of segment are dropped before the body is laid out around what
+  // remains, because a segment removed afterwards would leave the text it had
+  // split sitting in two paragraphs with nothing between them:
+  //
+  //  - a region holding nothing worth a row. Regions open on a round's status
+  //    marker, which on its own is bookkeeping, not something to show;
+  //  - once the turn has settled, a preview still marked streaming. It never
+  //    became a dispatched call (a duplicate parallel ask_user, a guard that
+  //    rejected the arguments), so there is nothing behind it to answer.
+  //
+  // Dropping either shifts the indices ``answerOffsets`` is keyed by, so the
+  // offsets are rebuilt alongside.
+  const kept: MessageSegment[] = [];
+  const keptOffsets = new Map<number, number>();
+  segments.forEach((segment, idx) => {
+    if (segment.kind === "trace" && !hasRenderableCallTrace(segment.events)) {
+      return;
+    }
+    if (!streaming && segment.kind === "ask_user" && segment.data.streaming) {
+      return;
+    }
+    const offset = answerOffsets.get(idx);
+    if (offset !== undefined) keptOffsets.set(kept.length, offset);
+    kept.push(segment);
+  });
 
+  // A live turn carries its own text on the wire. A settled one is restored
+  // from an event preview that drops `content` entirely, so its body has to be
+  // rebuilt from the persisted answer and laid out around the rows.
   const textFromEvents = kept.some(
     (s) => s.kind === "text" && s.text.length > 0,
   );
   const laidOut =
-    !textFromEvents && sawAskUser && answerContent
+    !textFromEvents && answerContent
       ? layOutAnswerContent(kept, answerContent, keptOffsets)
       : kept;
 
-  // Drop empty trailing/leading text segments so the renderer doesn't
-  // emit blank ``<AssistantResponse>`` nodes, and trace regions whose
-  // events all turned out to be unrenderable.
-  return laidOut.filter((s) =>
-    s.kind === "text"
-      ? s.text.length > 0
-      : s.kind !== "trace" || s.events.length > 0,
-  );
+  // Empty text segments last: the layout above creates them, and a blank one
+  // would render as an empty ``<AssistantResponse>``.
+  return laidOut.filter((s) => s.kind !== "text" || s.text.length > 0);
 }
 
 /**
- * Lay the persisted answer out around the cards of a settled message.
+ * Lay the persisted answer out around the rows of a settled message.
  *
- * Each card takes the text between the previous cut and its own offset; the
- * text past the last cut trails after everything. Offsets are read in order
- * and never move backwards, so a stray value cannot reorder the body.
+ * A reloaded turn has no `content` events — the event preview drops them — so
+ * the body is one stored string and every card and run of tool work has to be
+ * put back where it happened. Each row takes the text between the previous cut
+ * and its own recorded offset; the text past the last cut trails after
+ * everything. Offsets are read in order and never move backwards, so a stray
+ * value cannot reorder the body.
+ *
+ * A row with no recorded offset is placed differently by kind. A card is a
+ * question the reader was asked, so it belongs below everything written before
+ * it. A run of tool work is not worth pushing the whole answer above, so it
+ * simply keeps its position in the sequence.
  */
 function layOutAnswerContent(
   segments: MessageSegment[],
@@ -632,13 +666,11 @@ function layOutAnswerContent(
   };
   segments.forEach((segment, idx) => {
     if (segment.kind === "text") return;
-    if (segment.kind === "ask_user" || segment.kind === "mastery_question") {
-      const offset = answerOffsets.get(idx);
-      pushText(
-        offset === undefined
-          ? answerContent.length
-          : snapToLineStart(answerContent, Math.max(cursor, offset)),
-      );
+    const offset = answerOffsets.get(idx);
+    if (offset !== undefined) {
+      pushText(snapToLineStart(answerContent, Math.max(cursor, offset)));
+    } else if (segment.kind !== "trace") {
+      pushText(answerContent.length);
     }
     laidOut.push(segment);
   });
@@ -681,17 +713,45 @@ function snapToLineStart(content: string, offset: number): number {
 }
 
 /**
+ * Whether this event is what a card is built from, rather than trace material.
+ *
+ * A card renders in the message body, so the row its own events would draw in
+ * the activity block is the same step shown twice — as a question the reader
+ * can answer, and as a bare "tool call" line above the text that introduced
+ * it.
+ */
+function producesCard(event: StreamEvent): boolean {
+  const meta = (event.metadata ?? {}) as Record<string, unknown>;
+  if (event.type === "progress") {
+    return Boolean(meta.ask_user_resolved) || readAskUserDraft(event) !== null;
+  }
+  if (event.type !== "tool_result") return false;
+  if (readPosedQuestion(event)) return true;
+  const toolMetadata = meta.tool_metadata;
+  const askUser =
+    toolMetadata && typeof toolMetadata === "object"
+      ? (toolMetadata as Record<string, unknown>).ask_user
+      : null;
+  return normaliseAskUserPayload(askUser) !== null;
+}
+
+/**
  * The events whose trace rows still belong to the message's top activity
- * block: everything the segments did not claim for a post-card region.
+ * block — which, now that every row renders inline where the work happened,
+ * should be nothing at all. Kept as the honest statement of that: anything it
+ * returns is a step the body did not account for.
+ *
  * Pass it as ``AssistantActivity``'s ``traceEvents`` (or to a bare
- * ``TraceFlow``) so a resumed round's reasoning is not shown twice — once
- * where the user is looking, and once back above the card.
+ * ``TraceFlow``) so no step is shown twice.
  */
 export function leadingTraceEvents(
   events: StreamEvent[] | undefined,
   segments: MessageSegment[],
 ): StreamEvent[] {
   const claimed = new Set<StreamEvent>();
+  for (const event of events ?? []) {
+    if (producesCard(event)) claimed.add(event);
+  }
   for (const segment of segments) {
     if (segment.kind !== "trace") continue;
     for (const event of segment.events) claimed.add(event);

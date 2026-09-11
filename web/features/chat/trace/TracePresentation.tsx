@@ -42,7 +42,7 @@ import {
   groupTraceEvents,
   hasRenderableCallTrace as selectHasRenderableCallTrace,
   isChatLoopAnswerContent,
-  isNarrationRound,
+  isRetractedRound,
   isTracePending,
   selectTraceDisplayItems,
 } from "./selectors";
@@ -446,17 +446,15 @@ function getTraceHeader(
 }
 
 // Chat-loop `content` (call_kind "agent_loop_round") is the model's
-// user-facing text. Whether it belongs in the trace depends on the round:
-//   - a NARRATION round (the round ended with a tool call) → its text was
-//     the model's commentary before acting. It is stripped from the answer
-//     bubble, so it MUST surface in the trace.
-//   - a FINISH round (the round ended with no tool call) → its text IS the
-//     answer bubble; keep it out of the trace to avoid duplication.
-// The differentiator is the round's own ``call_status`` marker (call_role).
+// user-facing text, and it stays in the answer bubble — commentary written
+// before a tool call included. So it is kept OUT of the trace by default, to
+// avoid showing the same sentence twice. The one exception is a round a
+// capability retracted: that text is no longer in the bubble, so the trace is
+// the only place left for it.
 function getTraceText(
   events: StreamEvent[],
   eventTypes: Array<StreamEvent["type"]>,
-  // When the caller knows this group is a narration round, its
+  // When the caller knows this group's text was retracted, its
   // ``agent_loop_round`` content is trace material and should NOT be
   // filtered out as answer-bubble text.
   includeChatLoopContent = false,
@@ -781,7 +779,7 @@ function TraceRowBody({
   );
   const thoughtText = getTraceText(callEvents, ["thinking"]);
   const observationText = getTraceText(callEvents, ["observation"]);
-  // A chat round can emit BOTH reasoning (thinking) and narration commentary
+  // A chat round can emit BOTH reasoning (thinking) and retracted commentary
   // (content) in a single call; both are trace material and render as
   // separate stacked blocks. Other pipelines keep the legacy "thought or
   // content" fallback so their rows are unchanged.
@@ -789,7 +787,7 @@ function TraceRowBody({
   const contentText = getTraceText(
     callEvents,
     ["content"],
-    isNarrationRound(callEvents),
+    isRetractedRound(callEvents),
   );
   const bodyBlocks =
     role === "observe"
@@ -954,7 +952,7 @@ function hasExpandableContent(
   const contentText = getTraceText(
     callEvents,
     ["content"],
-    isNarrationRound(callEvents),
+    isRetractedRound(callEvents),
   );
   const genericBodyText =
     role === "observe"
@@ -1021,7 +1019,7 @@ function TraceRowItem({
   const isToolRow = kind === "tool_planning" || group === "tool_call";
   const isChatRound = kind === "agent_loop_round";
   const isRetrieve = role === "retrieve";
-  const narration = isNarrationRound(callEvents);
+  const retracted = isRetractedRound(callEvents);
   // The model's own text-form deliberation — chat-loop reasoning/narration and
   // pipeline "Thought"/"Plan" rounds. Unlike a tool call (whose result is
   // secondary detail worth folding away), here the text IS the substance, so
@@ -1058,7 +1056,7 @@ function TraceRowItem({
     | undefined;
 
   const thoughtText = getTraceText(callEvents, ["thinking"]).trim();
-  const contentText = getTraceText(callEvents, ["content"], narration).trim();
+  const contentText = getTraceText(callEvents, ["content"], retracted).trim();
 
   // Resolve every row into a uniform { icon, headline, chip } triple so the
   // activity feed reads consistently across pipelines. Tool calls get a human
@@ -1149,7 +1147,11 @@ function TraceRowItem({
       title={headline}
       detail={
         chip?.text ??
-        (isThinking && deliberation.length
+        // The preview is what stands in for the text while the row is folded.
+        // An open row already shows that text in full below, so repeating its
+        // opening on the title line prints the same sentence twice — which is
+        // what a short deliberation looks like the whole time it streams.
+        (isThinking && deliberation.length && !open
           ? plainPreview(deliberation[0])
           : undefined)
       }
@@ -1340,9 +1342,9 @@ function detectStreamingMode(
     // question with the structured qa_pair in metadata — that's the signal
     // the quizzing phase is active.
     if (callKind === "agent_loop_round") {
-      // The chat loop streams user-facing text as `content` (a short
-      // narration before a tool call, or the finish answer): show
-      // "responding" while text is flowing; thinking keeps "exploring".
+      // The chat loop streams user-facing text as `content` (commentary
+      // before a tool call, or the closing answer): show "responding" while
+      // text is flowing; thinking keeps "exploring".
       return event.type === "content" ? "responding" : "exploring";
     }
     if (callKind === "quiz_question_emitted") return "quizzing";
@@ -1677,26 +1679,24 @@ function isChatLoopTurn(events: StreamEvent[]): boolean {
 }
 
 /**
- * Whether the most recently *completed* round settled the turn: either a
- * genuinely tool-less ``finish`` round, or a round the backend explicitly
- * marked ``answer_visible`` — mastery's teaching-plus-status-check rounds, a
- * DSML-fallback round, a token-truncated-but-visible round (see
- * ``agent_loop.py``'s completion metadata) all combine tool calls with
- * learner-facing text in the same round, so ``call_role`` never reaches
- * ``"finish"`` for them even though the round is exactly what the trace
- * should collapse for.
+ * Whether the most recently *completed* round settled the turn — a tool-less
+ * ``finish`` round, the one shape that ends the loop.
  *
  * Looks at only the LATEST completed round, not "has one ever appeared" —
  * a token-truncated round is explicitly non-terminal (the loop keeps
  * writing), so once ITS OWN next round completes, that round's marker
  * supersedes this one and correctly reopens the trace if fresh tool calls
  * are still coming.
+ *
+ * ``answer_visible`` is deliberately not consulted: it says whether a round's
+ * text belongs to the answer, which is true of nearly every round and says
+ * nothing about whether the turn is over.
  */
 function lastRoundSettledFinal(events: StreamEvent[]): boolean {
   for (let idx = events.length - 1; idx >= 0; idx -= 1) {
     const meta = getTraceMeta(events[idx]);
     if (meta.trace_kind === "call_status" && meta.call_state === "complete") {
-      return meta.call_role === "finish" || meta.answer_visible === true;
+      return meta.call_role === "finish";
     }
   }
   return false;
@@ -1711,10 +1711,10 @@ function isFinalAnswerPhase(
   if (lastRoundSettledFinal(events)) return true;
   const mode = detectStreamingMode(events, hasFinalContent, true);
   if (mode === "responding" || mode === "responded") {
-    // Chat's single loop streams narration text mid-loop, which also reads
-    // as "responding" — there only a settled round marker (above) settles
-    // the phase; trusting the mode would flap the trace shut on every
-    // narration line and open again on the next tool call.
+    // Chat's single loop streams commentary mid-loop, which also reads as
+    // "responding" — there only a settled round marker (above) settles the
+    // phase; trusting the mode would flap the trace shut on every line of
+    // commentary and open again on the next tool call.
     return !isChatLoopTurn(events);
   }
   return false;

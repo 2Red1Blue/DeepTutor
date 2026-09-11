@@ -24,7 +24,7 @@ import {
 } from "@/lib/partner-groups-api";
 import { ReconnectingWebSocket } from "@/lib/reconnecting-websocket";
 import {
-  isNarrationMarker,
+  isRetractionMarker,
   recomputeAnswerContent,
   shouldAppendEventContent,
 } from "@/lib/stream";
@@ -95,14 +95,14 @@ type GroupFrame =
 /**
  * Grow a seat's visible body from one trace event.
  *
- * Answer text and narration arrive on the same ``content`` channel; a round is
- * only revealed as narration when its marker lands, so the body is appended
- * optimistically and recomputed when that happens. This is the same rule the
- * product chat uses (``lib/stream``), so a Partner's body reads identically in
- * both surfaces.
+ * Every round's text is body text, commentary written before a tool call
+ * included. A capability can retract a round it rejected, and that is only
+ * known when the round's marker lands — so the body is appended optimistically
+ * and recomputed then. This is the same rule the product chat uses
+ * (``lib/stream``), so a Partner's body reads identically in both surfaces.
  */
 function growBody(seat: Seat, event: StreamEvent): string {
-  if (isNarrationMarker(event)) {
+  if (isRetractionMarker(event)) {
     return recomputeAnswerContent([...seat.events, event]);
   }
   return shouldAppendEventContent(event)

@@ -195,8 +195,9 @@ def _answer_text(events: list[StreamEvent]) -> str:
     """The reply a reader is left with, by the same rule the client applies.
 
     Mirrors ``recomputeAnswerContent`` in ``web/lib/stream.ts``: append the
-    content of answer-bearing rounds, then take back out any round whose
-    completion marker resolved as ``narration``.
+    content of every answer-bearing round, then take back out any round whose
+    completion marker retracted it (``answer_visible: False``). Commentary a
+    round wrote before calling a tool is kept — the reader watched it arrive.
 
     Rounds stream optimistically, so text that a capability's finish guard
     rejects *is* briefly on the wire and then withdrawn. Asserting on this
@@ -204,14 +205,13 @@ def _answer_text(events: list[StreamEvent]) -> str:
     actually matters — what the reader ends up holding — instead of whether a
     rejected round was buffered, which is an implementation choice.
     """
-    narration = {
+    retracted = {
         str(event.metadata.get("call_id"))
         for event in events
         if event.type == StreamEventType.PROGRESS
         and event.metadata.get("trace_kind") == "call_status"
         and event.metadata.get("call_state") == "complete"
-        and event.metadata.get("call_role") == "narration"
-        and event.metadata.get("answer_visible") is not True
+        and event.metadata.get("answer_visible") is False
         and event.metadata.get("call_id")
     }
     parts: list[str] = []
@@ -223,7 +223,7 @@ def _answer_text(events: list[StreamEvent]) -> str:
         if call_id:
             if metadata.get("call_kind") not in ANSWER_BEARING_CALL_KINDS:
                 continue
-            if str(call_id) in narration:
+            if str(call_id) in retracted:
                 continue
         parts.append(event.content)
     return "".join(parts)
@@ -624,7 +624,11 @@ async def test_tool_round_then_finish(monkeypatch: pytest.MonkeyPatch) -> None:
     result = _result(events)
     assert result.metadata["tool_steps"] == 1
     assert result.metadata["rounds"] == 2
-    # Only the finish round's text is the persisted answer.
+    # The reader keeps BOTH: the commentary that introduced the search and the
+    # closing answer, in the order they were written.
+    assert _answer_text(events) == "Searching.Found what was needed."
+    # RESULT still reports the closing answer alone — it is what an SDK caller
+    # or a title generator asked for, not the running commentary.
     assert result.metadata["response"] == "Found what was needed."
 
 

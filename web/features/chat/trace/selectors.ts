@@ -118,20 +118,24 @@ export function isChatLoopAnswerContent(event: StreamEvent): boolean {
   );
 }
 
-export function isNarrationRound(events: StreamEvent[]): boolean {
+/**
+ * Whether this group's own text was taken back out of the answer. Only then
+ * is a chat-loop round's prose trace material — ordinary commentary stays in
+ * the bubble where the reader watched it arrive.
+ */
+export function isRetractedRound(events: StreamEvent[]): boolean {
   return events.some((event) => {
     const meta = getTraceMeta(event);
     return (
       meta.trace_kind === "call_status" &&
       meta.call_state === "complete" &&
-      meta.call_role === "narration" &&
-      meta.answer_visible !== true
+      meta.answer_visible === false
     );
   });
 }
 
 export function groupHasTraceSubstance(events: StreamEvent[]): boolean {
-  const narration = isNarrationRound(events);
+  const retracted = isRetractedRound(events);
   return events.some((event) => {
     if (
       event.type === "tool_call" ||
@@ -151,7 +155,7 @@ export function groupHasTraceSubstance(events: StreamEvent[]): boolean {
     }
     if (event.type === "content") {
       return (
-        (narration || !isChatLoopAnswerContent(event)) &&
+        (retracted || !isChatLoopAnswerContent(event)) &&
         Boolean(event.content.trim())
       );
     }

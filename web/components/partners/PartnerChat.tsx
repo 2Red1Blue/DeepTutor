@@ -8,7 +8,7 @@
  * `StreamEvent` shape), so this reuses product chat's rendering wholesale:
  * `AssistantActivity` shows the live thinking/tool trace (open while
  * working, collapsed once answered) and the answer text is recomputed with
- * the same narration-demotion rules as chat.
+ * the same retraction rules as chat.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -32,7 +32,7 @@ import type { ExportableMessage } from "@/lib/chat-export";
 import type { StreamEvent } from "@/features/chat/model/protocol";
 import { docIconFor, formatBytes, isSvgFilename } from "@/lib/doc-attachments";
 import {
-  isNarrationMarker,
+  isRetractionMarker,
   recomputeAnswerContent,
   shouldAppendEventContent,
 } from "@/lib/stream";
@@ -409,7 +409,7 @@ export default function PartnerChat({
           current.events.push(data.event);
           if (shouldAppendEventContent(data.event)) {
             current.content += data.event.content;
-          } else if (isNarrationMarker(data.event)) {
+          } else if (isRetractionMarker(data.event)) {
             current.content = recomputeAnswerContent(current.events);
           }
           externalLive.set(activityId, current);
@@ -468,9 +468,9 @@ export default function PartnerChat({
         live.events.push(event);
         if (shouldAppendEventContent(event)) {
           live.content += event.content;
-        } else if (isNarrationMarker(event)) {
-          // A round resolved as narration — its streamed text belongs to
-          // the trace, not the answer. Same demotion rule as product chat.
+        } else if (isRetractionMarker(event)) {
+          // A capability took this round's text back out of the answer.
+          // Same retraction rule as product chat.
           live.content = recomputeAnswerContent(live.events);
         }
         publish();

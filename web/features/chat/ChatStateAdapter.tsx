@@ -56,7 +56,7 @@ import {
 import { nextOptimisticId, resolvePersistedMessage } from "@/lib/optimistic-id";
 import { reconcileTurnIds } from "@/lib/turn-reconcile";
 import {
-  isNarrationMarker,
+  isRetractionMarker,
   recomputeAnswerContent,
   shouldAppendEventContent,
 } from "@/lib/stream";
@@ -745,10 +745,10 @@ function reducer(state: ProviderState, action: Action): ProviderState {
       const language = session.language;
       let rawContent = last?.rawContent ?? last?.content ?? "";
       let content = last?.content ?? "";
-      if (isNarrationMarker(action.event)) {
-        // A round just resolved as narration (preamble before a tool call):
-        // drop its already-streamed text from the answer — it stays in the
-        // trace. Recompute from immutable event content, never from display text.
+      if (isRetractionMarker(action.event)) {
+        // A capability rejected this round after it had already streamed:
+        // drop its text from the answer — it stays in the trace. Recompute
+        // from immutable event content, never from display text.
         rawContent = recomputeAnswerContent(events);
         content = repairChineseEmphasis(rawContent, language);
       } else if (shouldAppendEventContent(action.event)) {

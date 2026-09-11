@@ -1,6 +1,6 @@
 import type { StreamEvent } from "@/features/chat/model/protocol";
 import {
-  collectNarrationCallIds,
+  collectRetractedCallIds,
   shouldAppendEventContent,
 } from "@/lib/stream";
 
@@ -172,7 +172,7 @@ export function settleMessageTrace(
   events: StreamEvent[],
   turnId: string | null,
 ): { events: StreamEvent[]; trace: MessageTraceMetadata } {
-  const narration = collectNarrationCallIds(events);
+  const retracted = collectRetractedCallIds(events);
   let answerLength = 0;
   let lastSeq = 0;
   const stamped = events.map((event) => {
@@ -180,7 +180,7 @@ export function settleMessageTrace(
     const meta = metadata(event);
     if (shouldAppendEventContent(event)) {
       const callId = typeof meta.call_id === "string" ? meta.call_id : "";
-      if (!callId || !narration.has(callId))
+      if (!callId || !retracted.has(callId))
         answerLength += event.content.length;
       return event;
     }

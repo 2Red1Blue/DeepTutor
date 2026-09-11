@@ -34,7 +34,6 @@ from .._turn_runtime_shared import (
     _format_selection_tutor_context,
     _mastery_action_context,
     _mastery_path_id,
-    _narration_marker_call_id,
     _partner_group_references,
     _reading_action_context,
     _reading_material_id,
@@ -46,8 +45,9 @@ from .._turn_runtime_shared import (
     _request_snapshot_metadata,
     _resolve_selection_tutor_context,
     _resolve_turn_outcome,
+    _retracted_round_call_id,
     _should_capture_assistant_content,
-    _stamp_ask_user_content_offset,
+    _stamp_content_offset,
     _timed_media_id,
     _timed_media_viewport,
     _topic_material_manifest,
@@ -146,18 +146,19 @@ class TurnExecutor:
         assistant_events: list[dict[str, Any]] = []
         assistant_content = ""
         provider_response_state: dict[str, Any] | None = None
-        # Per-round content segments + narration call_ids: a chat-loop round's
-        # text is captured live but a round that resolves as narration is
-        # dropped from the persisted answer (mirrors the frontend bubble).
+        # Per-round content segments + retracted call_ids: every chat-loop
+        # round's text is captured live and kept, commentary written before a
+        # tool call included. Only a round a capability retracted is dropped
+        # from the persisted answer (mirrors the frontend bubble).
         content_segments: list[tuple[str | None, str]] = []
-        narration_call_ids: set[str] = set()
+        retracted_call_ids: set[str] = set()
 
         def _persisted_answer() -> str:
             # clean_thinking_tags is a second line of defence: providers that
             # inline <think> in the content channel are split at streaming
             # time by the agent loop, but anything that slips through must
             # never be persisted as the user-facing answer.
-            return _assemble_persisted_answer(content_segments, narration_call_ids)
+            return _assemble_persisted_answer(content_segments, retracted_call_ids)
 
         # Files the model generated this turn (exec artifacts),
         # persisted as assistant-message attachments so the UI shows openable
@@ -854,17 +855,19 @@ class TurnExecutor:
                     continue
                 payload_event = await self._publish_live_event(execution, event)
                 if payload_event.get("type") not in {"done", "session"}:
-                    # A card reply lives inside this assistant row. Persist
-                    # the exact user-facing answer boundary so future context
-                    # can replay assistant -> user -> assistant in order.
-                    _stamp_ask_user_content_offset(payload_event, _persisted_answer())
+                    # Cards and tool calls render between runs of answer
+                    # text. Persist the exact boundary each one sat at so a
+                    # reloaded turn lays the answer out the way it streamed,
+                    # and so future context can replay assistant -> user ->
+                    # assistant in order.
+                    _stamp_content_offset(payload_event, _persisted_answer())
                     assistant_events.append(payload_event)
                 if _should_capture_assistant_content(event):
                     call_id = (event.metadata or {}).get("call_id")
                     content_segments.append((str(call_id) if call_id else None, event.content))
-                narration_call_id = _narration_marker_call_id(event)
-                if narration_call_id:
-                    narration_call_ids.add(narration_call_id)
+                retracted_call_id = _retracted_round_call_id(event)
+                if retracted_call_id:
+                    retracted_call_ids.add(retracted_call_id)
                 for attachment in artifact_attachments(event):
                     if attachment["url"] not in seen_artifact_urls:
                         seen_artifact_urls.add(attachment["url"])
@@ -906,8 +909,8 @@ class TurnExecutor:
             # already unwinding and must not start new blocking work.
             await fill_preview_text(generated_attachments)
 
-            # The persisted answer is the captured content minus any narration
-            # rounds (their text stayed in the trace, never the answer). Apply
+            # The persisted answer is the captured content minus any round a
+            # capability retracted (that text stayed in the trace). Apply
             # the CJK Markdown repair only after every streamed segment has
             # arrived, so no incomplete response is ever rewritten.
             assistant_content = _repair_chinese_emphasis_for_persistence(

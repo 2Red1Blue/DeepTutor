@@ -49,6 +49,87 @@ const resolved = (toolCallId: string) =>
     answers: [{ questionId: "q1", text: "B" }],
   });
 
+test("work is laid out between the text that introduced it and what followed", () => {
+  // The shape the whole change exists for: say what you are about to do, do
+  // it, say what came of it — in that order, in one bubble.
+  const segments = extractMessageSegments([
+    event(
+      "content",
+      { call_id: "round-1", call_kind: "agent_loop_round" },
+      "Let me look that up.",
+    ),
+    event("tool_call", { call_id: "tool-1" }, "web_search"),
+    event("tool_result", { call_id: "tool-1" }, "three results"),
+    event(
+      "content",
+      { call_id: "round-2", call_kind: "agent_loop_round" },
+      "It is 1957.",
+    ),
+  ]);
+
+  assert.deepEqual(
+    segments.map((segment) => segment.kind),
+    ["text", "trace", "text"],
+  );
+  assert.equal(
+    segments[0].kind === "text" && segments[0].text,
+    "Let me look that up.",
+  );
+  assert.equal(segments[2].kind === "text" && segments[2].text, "It is 1957.");
+});
+
+test("a fresh run of work opens below the text that follows the previous one", () => {
+  const segments = extractMessageSegments([
+    event("content", { call_id: "r1", call_kind: "agent_loop_round" }, "First,"),
+    event("tool_call", { call_id: "t1" }, "read_source"),
+    event("content", { call_id: "r2", call_kind: "agent_loop_round" }, "Now,"),
+    event("tool_call", { call_id: "t2" }, "web_search"),
+    event("content", { call_id: "r3", call_kind: "agent_loop_round" }, "Done."),
+  ]);
+
+  assert.deepEqual(
+    segments.map((segment) => segment.kind),
+    ["text", "trace", "text", "trace", "text"],
+  );
+  // Each region holds only its own call, not everything that came before.
+  const first = segments[1];
+  const second = segments[3];
+  assert.equal(first.kind === "trace" && first.events.length, 1);
+  assert.equal(second.kind === "trace" && second.events.length, 1);
+});
+
+test("a reloaded turn keeps each run of work under its own paragraph", () => {
+  // The event preview a settled turn is restored from carries no `content`,
+  // so the two calls arrive back to back with nothing between them. Only the
+  // boundary each recorded still says which paragraph it belonged under —
+  // without it both rows collapsed into one block and the reload no longer
+  // resembled the turn the reader had watched.
+  const first = "Let me look that up.\n\n";
+  const second = "That confirms it. Checking one more thing.\n\n";
+  const closing = "So the answer is 1957.";
+  const segments = extractMessageSegments(
+    [
+      event("tool_call", { call_id: "t1", assistant_content_offset: first.length }),
+      event("tool_result", { call_id: "t1" }, "a source"),
+      event("tool_call", {
+        call_id: "t2",
+        assistant_content_offset: (first + second).length,
+      }),
+      event("tool_result", { call_id: "t2" }, "three results"),
+      event("done", { status: "completed" }),
+    ],
+    first + second + closing,
+  );
+
+  assert.deepEqual(
+    segments.map((segment) => segment.kind),
+    ["text", "trace", "text", "trace", "text"],
+  );
+  assert.equal(segments[0].kind === "text" && segments[0].text, first);
+  assert.equal(segments[2].kind === "text" && segments[2].text, second);
+  assert.equal(segments[4].kind === "text" && segments[4].text, closing);
+});
+
 test("reasoning produced after a card becomes its own segment below it", () => {
   const before = event(
     "thinking",
@@ -75,31 +156,36 @@ test("reasoning produced after a card becomes its own segment below it", () => {
 
   assert.deepEqual(
     segments.map((segment) => segment.kind),
-    ["ask_user", "trace", "text"],
+    ["trace", "ask_user", "trace", "text"],
   );
-  const traceSegment = segments[1];
-  assert.equal(traceSegment.kind === "trace" && traceSegment.events.length, 1);
+  const beforeCard = segments[0];
   assert.equal(
-    traceSegment.kind === "trace" && traceSegment.events[0].content,
+    beforeCard.kind === "trace" && beforeCard.events[0].content,
+    "planning a question",
+  );
+  const afterCard = segments[2];
+  assert.equal(afterCard.kind === "trace" && afterCard.events.length, 1);
+  assert.equal(
+    afterCard.kind === "trace" && afterCard.events[0].content,
     "grading their answer",
   );
 });
 
-test("the pre-card rounds stay with the top activity block", () => {
+test("every round is claimed inline, leaving the header block nothing to show", () => {
+  // Trace rows render where the work happened. Anything still handed to the
+  // pinned activity block would be the same step shown a second time.
   const before = event("thinking", { call_id: "round-1" }, "planning");
   const after = event("thinking", { call_id: "round-2" }, "grading");
   const events = [before, askUserCard("call-1"), resolved("call-1"), after];
 
   const leading = leadingTraceEvents(events, extractMessageSegments(events));
 
-  assert.deepEqual(leading, [
-    before,
-    askUserCard("call-1"),
-    resolved("call-1"),
-  ]);
+  // Nothing at all: the reasoning is claimed by its inline region, and the
+  // card's own events render as the card rather than as a bare tool row.
+  assert.deepEqual(leading, []);
 });
 
-test("a turn with no card keeps every event in the top block", () => {
+test("a turn with no tool work is a single run of prose", () => {
   const events = [
     event("thinking", { call_id: "round-1" }, "thinking"),
     event(
@@ -112,9 +198,11 @@ test("a turn with no card keeps every event in the top block", () => {
 
   assert.deepEqual(
     segments.map((segment) => segment.kind),
-    ["text"],
+    ["trace", "text"],
   );
-  assert.deepEqual(leadingTraceEvents(events, segments), events);
+  // The reasoning is claimed by the inline region; only the answer text is
+  // left over, and answer text was never a trace row to begin with.
+  assert.deepEqual(leadingTraceEvents(events, segments), [events[1]]);
 });
 
 test("each card gets the rounds that followed it", () => {
@@ -218,9 +306,12 @@ test("a posed mastery question is its own segment, not an ask_user card", () => 
     answer,
   );
 
+  // The `mastery_quiz` call carries no call_id of its own, so there is no row
+  // to draw for it and the region it opened is dropped rather than left as an
+  // empty gap.
   assert.deepEqual(
     segments.map((segment) => segment.kind),
-    ["text", "mastery_question", "trace"],
+    ["text", "mastery_question"],
   );
   // The whole settled answer lays out above the card that ended the turn.
   assert.equal(segments[0].kind === "text" && segments[0].text, answer);
@@ -278,14 +369,14 @@ test("a resolved card splits the settled answer at its stamped offset", () => {
 
   assert.deepEqual(
     segments.map((segment) => segment.kind),
-    ["text", "ask_user", "trace", "text"],
+    ["text", "ask_user", "text"],
   );
   assert.equal(segments[0].kind === "text" && segments[0].text, intro);
   assert.equal(
     segments[1].kind === "ask_user" && segments[1].data.resolved,
     true,
   );
-  assert.equal(segments[3].kind === "text" && segments[3].text, reply);
+  assert.equal(segments[2].kind === "text" && segments[2].text, reply);
 });
 
 test("an offset measured before the CJK repair still cuts at the paragraph", () => {

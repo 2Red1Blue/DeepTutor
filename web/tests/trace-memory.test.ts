@@ -123,6 +123,7 @@ test("settling a message keeps its card and stamps where the answer was cut", ()
           trace_kind: "call_status",
           call_state: "complete",
           call_role: "narration",
+          answer_visible: true,
         }),
         seq: 2,
       },
@@ -157,10 +158,11 @@ test("settling a message keeps its card and stamps where the answer was cut", ()
     settled.events.map((item) => item.type),
     ["tool_result", "progress", "done"],
   );
-  // The narration preamble never reached the answer, so it is not counted.
+  // The commentary the turn opened with is answer text too, so the boundary
+  // the card was cut at counts it.
   assert.equal(
     settled.events[1].metadata?.assistant_content_offset,
-    "Two ways.\n\n".length,
+    "preamble Two ways.\n\n".length,
   );
   assert.deepEqual(settled.trace, {
     turn_id: "turn-1",

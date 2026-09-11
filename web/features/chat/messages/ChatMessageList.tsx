@@ -574,40 +574,44 @@ export const AssistantMessage = memo(function AssistantMessage({
     [courseHandoffs.length, isStreaming, msg.content],
   );
 
-  // Interleaved segments for the default chat surface — text emitted
-  // before the card renders above it; text emitted by the round that
-  // follows renders below. Only walked when this message will actually
-  // render through the default branch (the research / quiz / animator /
-  // visualize branches have their own layout and pin the card elsewhere).
-  const useInlineCardSegments =
+  // Interleaved segments for the default chat surface: the message is laid
+  // out in the order it was written — what DeepTutor said it was about to do,
+  // the work it then did, what it found, and so on down to the closing answer.
+  // Only walked when this message will actually render through the default
+  // branch (the research / quiz / animator / visualize branches have their own
+  // layout and pin their cards elsewhere).
+  const useInlineSegments =
     !outlinePreview &&
     !mathAnimatorResult &&
     !visualizeResult &&
     !(quizQuestions && quizQuestions.length > 0);
   const messageSegments = useMemo(
     () =>
-      useInlineCardSegments
+      useInlineSegments
         ? extractMessageSegments(msg.events, msg.content, {
             streaming: isStreaming,
           })
         : [],
-    [useInlineCardSegments, msg.events, msg.content, isStreaming],
+    [useInlineSegments, msg.events, msg.content, isStreaming],
   );
   // Either card kind: a clarifying ask_user, or a posed mastery question.
-  // Both interleave with the prose, and a message that has one lays itself
-  // out from the segments rather than from a single body string.
   const hasInlineCards =
-    useInlineCardSegments &&
+    useInlineSegments &&
     messageSegments.some(
       (seg) => seg.kind === "ask_user" || seg.kind === "mastery_question",
     );
-  // The activity block is pinned to the top of the message, so it can only
-  // show the rounds that ran BEFORE the first card. What the resumed rounds
-  // reason about renders below the card they answer, in stream order.
+  // Lay the body out from the segments whenever there is more to place than
+  // one run of prose. A message with nothing but text gets the plain body
+  // branch below, which is the same thing with less machinery.
+  const useSegmentLayout =
+    useInlineSegments && messageSegments.some((seg) => seg.kind !== "text");
+  // Every trace row now renders inline, where the work happened. The header
+  // block keeps its status line and nothing else — leaving rows up there too
+  // would show each step twice.
   const headerTraceEvents = useMemo(
     () =>
-      hasInlineCards ? leadingTraceEvents(events, messageSegments) : undefined,
-    [hasInlineCards, messageSegments, events],
+      useSegmentLayout ? leadingTraceEvents(events, messageSegments) : undefined,
+    [useSegmentLayout, messageSegments, events],
   );
 
   const researchInProgress =
@@ -721,11 +725,12 @@ export const AssistantMessage = memo(function AssistantMessage({
             language={language}
           />
         </>
-      ) : hasInlineCards ? (
-        // Default chat surface with one or more cards: render text and
-        // cards in the exact order they were streamed, so the narration
-        // that introduced a card sits above it and whatever the next round
-        // said sits below.
+      ) : useSegmentLayout ? (
+        // Default chat surface: render text, tool work and cards in the exact
+        // order they were streamed. The sentence that introduced a step sits
+        // above it and whatever the next round said sits below, so the message
+        // reads as a running account rather than an answer with its working
+        // hidden in a block at the top.
         messageSegments.map((seg) =>
           seg.kind === "text" ? (
             <AssistantResponse
@@ -738,8 +743,8 @@ export const AssistantMessage = memo(function AssistantMessage({
               events={events}
             />
           ) : seg.kind === "trace" ? (
-            // What DeepTutor worked out after the user answered — shown
-            // where they are looking, not back up in the header block.
+            // One run of work, shown where it happened — between the text
+            // that introduced it and the text that followed.
             <NestedTraceFlow
               key={seg.key}
               events={seg.events}
