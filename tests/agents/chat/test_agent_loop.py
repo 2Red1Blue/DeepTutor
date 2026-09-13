@@ -1168,7 +1168,10 @@ async def test_truncated_reasoning_round_replays_state_and_keeps_tools(
         and event.metadata.get("call_state") == "complete"
         and event.metadata.get("finish_reason") == "length"
     )
-    assert first_complete.metadata["requested_max_tokens"] == 8000
+    # The budget the round asked for, not a literal: `chat.responding.max_tokens`
+    # is an agents.yaml knob, so pinning the shipped default here made the test
+    # read whatever budget the developer running it happens to have configured.
+    assert first_complete.metadata["requested_max_tokens"] == pipeline.loop_max_tokens
     assert first_complete.metadata["usage_reported"] is False
     assert first_complete.metadata["completion_tokens"] == "unavailable"
     assert first_complete.metadata["reasoning_chars"] > 0
