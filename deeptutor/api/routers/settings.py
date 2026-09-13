@@ -8,6 +8,8 @@ UI preferences, configuration catalog management, and detailed streamed tests.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+import contextlib
 from copy import deepcopy
 import json
 import logging
@@ -361,26 +363,34 @@ class DocumentParsingInstall(BaseModel):
     engine: str
 
 
-def _invalidate_runtime_caches(
-    *,
-    catalog_before: dict[str, Any] | None = None,
-    catalog_after: dict[str, Any] | None = None,
-) -> None:
-    """Force runtime clients/config to pick up the latest saved catalog.
+@contextlib.contextmanager
+def _runtime_catalog_write() -> Iterator[None]:
+    """Bracket a write to the model catalog, resetting clients if it landed.
 
-    The LLM and embedding clients are process-wide singletons, so resetting
-    them here will affect any user turn that is mid-flight on another worker.
-    Admins issuing Apply during active sessions accept that trade-off; we log
-    a WARNING so the cause is visible in the audit trail.
+    The LLM and embedding clients are process-wide singletons that resolve
+    from this one file, so resetting them affects any user turn mid-flight on
+    another worker; admins issuing Apply during active sessions accept that,
+    and the WARNING keeps the cause in the audit trail.
 
-    An apply whose saved catalog equals the one the clients were built from
-    changes nothing they would read, so it skips the reset: the runtime
-    resolves from this one file, so an equal catalog means an equal client.
-    That is the shape a settings visit re-applying the same configuration
-    takes, and each redundant reset used to flip the client out from under an
-    in-flight turn and hang it in the provider retry ladder (#1421).
+    An apply that saved the catalog already on disk changes nothing those
+    clients would read. That is the shape a settings visit re-applying the
+    same configuration takes, and each redundant reset flipped the backend
+    client out from under an in-flight turn and dropped it into the provider
+    retry ladder — the cold start whose first message sat in a loop until a
+    restart (#1421).
+
+    Whether the catalog changed is a property of the file, not of the caller,
+    so both sides are read here. Five endpoints each assembling their own
+    before/after pair is five chances to pair the wrong two and a sixth
+    endpoint's chance to forget; wrapping the write is the whole contract.
+
+    A write that raises leaves the block without resetting, which is what a
+    failed write should do: there is nothing new for the clients to read.
     """
-    if catalog_before is not None and catalog_after is not None and catalog_before == catalog_after:
+    service = get_model_catalog_service()
+    before = service.load()
+    yield
+    if service.load() == before:
         return
     logger.warning(
         "Admin applied catalog; resetting global LLM/embedding clients. "
@@ -889,21 +899,17 @@ async def update_openai_codex_reasoning_effort(
     payload: CodexReasoningEffortUpdate,
 ) -> dict[str, Any]:
     _require_codex_oauth_actor()
-    catalog_before = get_model_catalog_service().load()
-    try:
-        status_payload = await get_codex_oauth_service().set_reasoning_effort(
-            payload.model,
-            payload.reasoning_effort,
-        )
-    except CodexAuthError as exc:
-        raise _codex_http_exception(exc) from None
-    # This writes the catalog the runtime resolves against, like every other
-    # catalog write here — without it the next turn keeps the old effort until
-    # something else happens to invalidate.
-    _invalidate_runtime_caches(
-        catalog_before=catalog_before,
-        catalog_after=get_model_catalog_service().load(),
-    )
+    # The codex service writes the catalog the runtime resolves against, like
+    # every other catalog write here — unbracketed, the next turn would keep
+    # the old effort until something else happened to reset the clients.
+    with _runtime_catalog_write():
+        try:
+            status_payload = await get_codex_oauth_service().set_reasoning_effort(
+                payload.model,
+                payload.reasoning_effort,
+            )
+        except CodexAuthError as exc:
+            raise _codex_http_exception(exc) from None
     return status_payload
 
 
@@ -1473,8 +1479,8 @@ async def update_catalog(payload: CatalogPayload):
     current = service.load()
     restored = restore_catalog_secrets(payload.catalog, current)
     proposed = reconcile_codex_catalog_update(current, restored)
-    catalog = service.save(proposed)
-    _invalidate_runtime_caches(catalog_before=current, catalog_after=catalog)
+    with _runtime_catalog_write():
+        catalog = service.save(proposed)
     return {"catalog": redact_catalog_secrets(catalog)}
 
 
@@ -1494,7 +1500,8 @@ async def apply_catalog_service(payload: CatalogServicePayload):
     proposed.setdefault("services", {})[payload.service] = deepcopy(payload.config)
     restored = restore_catalog_secrets(proposed, current)
     reconciled = reconcile_codex_catalog_update(current, restored)
-    runtime = service.apply(reconciled)
+    with _runtime_catalog_write():
+        runtime = service.apply(reconciled)
     catalog = service.load()
 
     # A previously saved draft contains a full catalog. Keep it, but advance
@@ -1515,7 +1522,6 @@ async def apply_catalog_service(payload: CatalogServicePayload):
     else:
         public_draft = redact_draft(draft_service.save(stored_draft))
 
-    _invalidate_runtime_caches(catalog_before=current, catalog_after=catalog)
     return {
         "message": f"{payload.service} settings applied to runtime.",
         "catalog": redact_catalog_secrets(catalog),
@@ -1586,10 +1592,10 @@ async def apply_catalog(payload: CatalogPayload | None = None):
             else current
         )
     catalog = reconcile_codex_catalog_update(current, proposed)
-    applied = service.apply(catalog)
+    with _runtime_catalog_write():
+        applied = service.apply(catalog)
     catalog_after = service.load()
     draft_service.clear()
-    _invalidate_runtime_caches(catalog_before=current, catalog_after=catalog_after)
     return {
         "message": "Catalog applied to runtime settings.",
         "catalog": redact_catalog_secrets(catalog_after),
@@ -1860,8 +1866,8 @@ async def complete_tour(payload: TourCompletePayload | None = None):
         if payload and payload.catalog
         else current
     )
-    applied = service.apply(catalog)
-    _invalidate_runtime_caches(catalog_before=current, catalog_after=service.load())
+    with _runtime_catalog_write():
+        applied = service.apply(catalog)
     now = int(time.time())
     launch_at = now + 3
     redirect_at = now + 5
