@@ -234,6 +234,40 @@ async def test_quiz_then_grade_drives_memory_gate(path_id):
 
 
 @pytest.mark.asyncio
+async def test_quiz_on_a_qualitative_objective_says_the_question_cannot_open_it(path_id):
+    """Probing a concept with a question is allowed, but never silent.
+
+    ``mastery_assess`` aimed at a quantitative objective is refused outright.
+    The mirror direction stays permitted — a question is a fair way to check
+    what the learner already knows — so the notice has to carry what the
+    refusal would otherwise have said.
+    """
+    build = json.loads((await _build_basic(path_id)).content)
+    points = build["map"]["modules"][0]["knowledge_points"]
+    concept_id = next(p["id"] for p in points if p["type"] == "concept")
+
+    result = await MasteryQuizTool().execute(
+        _mastery_path_id=path_id,
+        knowledge_point_id=concept_id,
+        question="Why does XOR matter?",
+        expected_answer="it is not linearly separable",
+        question_type="short",
+    )
+    assert "mastery_assess" in result.content
+
+    memory_id = next(p["id"] for p in points if p["type"] == "memory")
+    await MasterySkipQuestionTool().execute(_mastery_path_id=path_id)
+    quantitative = await MasteryQuizTool().execute(
+        _mastery_path_id=path_id,
+        knowledge_point_id=memory_id,
+        question="2+2?",
+        expected_answer="4",
+        question_type="short",
+    )
+    assert "mastery_assess" not in quantitative.content
+
+
+@pytest.mark.asyncio
 async def test_grade_on_a_qualitative_objective_sends_the_tutor_to_assess(path_id):
     """A concept objective cannot be cleared by questions, and grading says so.
 

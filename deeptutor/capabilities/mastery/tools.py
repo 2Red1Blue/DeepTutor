@@ -922,6 +922,20 @@ class MasteryQuizTool(BaseTool):
                 "button. That list was removed from the stem. Pass the ask in "
                 "'question' and the choices only in 'options'."
             )
+        if kp.type in QUALITATIVE_TYPES:
+            # The mirror of ``record_qualitative_for_path``, which refuses
+            # outright when mastery_assess is aimed at a quantitative
+            # objective. This direction stays allowed — a question is a fair
+            # way to probe a concept before teaching it — but it must not be
+            # silent: the attempt lands in ``mastery_levels``, the qualitative
+            # gate never reads it, and a tutor that assumes otherwise poses
+            # questions forever at an objective they cannot open.
+            notice += (
+                " This objective is gated qualitatively: grading this answer "
+                "will not open it, however right the answer is. Use the "
+                "question to probe, then have the learner explain the idea in "
+                "their own words and record that with mastery_assess."
+            )
 
         return ToolResult(
             content=notice,
