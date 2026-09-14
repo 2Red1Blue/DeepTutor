@@ -28,6 +28,7 @@ import hashlib
 import logging
 import os
 from pathlib import Path
+import sqlite3
 import threading
 import time
 from typing import Any, Iterator
@@ -110,8 +111,7 @@ class FileLibraryStore:
     # ------------------------------------------------------------------
 
     @contextmanager
-    def _connect(self) -> Iterator[None]:
-        import sqlite3
+    def _connect(self) -> Iterator[sqlite3.Connection]:
 
         conn = sqlite3.connect(str(self._db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
@@ -122,7 +122,6 @@ class FileLibraryStore:
             conn.close()
 
     def _init_db(self) -> None:
-        import sqlite3
 
         with self._connect() as conn:
             conn.execute(
@@ -231,7 +230,6 @@ class FileLibraryStore:
         filename: str,
         mime_type: str,
     ) -> dict[str, Any]:
-        import sqlite3
 
         sha = _sha256(data)
         now = time.time()
