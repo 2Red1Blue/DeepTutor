@@ -191,3 +191,77 @@ def test_timed_out_sync_extension_opens_circuit_without_queueing(material, monke
         assert calls == 1
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("use_uvloop", [False, True])
+def test_async_reading_action_runs_on_its_event_loop(material, monkeypatch, use_uvloop):
+    """Vocabulary/translation actions must work under Uvicorn's uvloop (#1448)."""
+    if use_uvloop:
+        pytest.importorskip("uvloop")
+
+    async def run(*_args):
+        asyncio.get_running_loop()
+        return ReadingExtensionResult(type="card", payload={"body": "translated"})
+
+    registry = ReadingExtensionRegistry([_extension(run)])
+    monkeypatch.setattr(reading_extensions, "get_reading_extension_registry", lambda: registry)
+    app = FastAPI()
+    app.include_router(reading_extensions.router, prefix="/api/reading")
+    with TestClient(app, backend_options={"use_uvloop": use_uvloop}) as client:
+        response = client.post(
+            f"/api/reading/materials/{material.material_id}/extensions/sample/actions/open",
+            json={"locator": 1},
+        )
+    assert response.status_code == 200
+    assert response.json()["payload"]["body"] == "translated"
+
+
+@pytest.mark.parametrize("sync_wrapper", [False, True])
+def test_async_reading_action_can_be_retried_after_timeout(material, monkeypatch, sync_wrapper):
+    calls = 0
+
+    async def run(*_args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(1)
+        return ReadingExtensionResult(type="card")
+
+    handler = (lambda *args: run(*args)) if sync_wrapper else run
+    monkeypatch.setattr(reading_extensions, "ACTION_TIMEOUT_S", 0.01)
+    client = _client(monkeypatch, _extension(handler))
+    url = f"/api/reading/materials/{material.material_id}/extensions/sample/actions/open"
+    assert client.post(url, json={"locator": 1}).status_code == 503
+    assert client.post(url, json={"locator": 1}).status_code == 200
+    assert calls == 2
+
+
+def test_reading_action_logs_the_cause_of_unavailability(material, monkeypatch, caplog):
+    def run(*_args):
+        raise RuntimeError("provider unavailable")
+
+    client = _client(monkeypatch, _extension(run))
+    response = client.post(
+        f"/api/reading/materials/{material.material_id}/extensions/sample/actions/open",
+        json={"locator": 1},
+    )
+    assert response.status_code == 503
+    assert any(
+        record.exc_info and "action open failed" in record.message for record in caplog.records
+    )
+
+
+def test_sync_reading_failure_does_not_disable_retry(material, monkeypatch):
+    calls = 0
+
+    def run(*_args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary provider failure")
+        return ReadingExtensionResult(type="card")
+
+    client = _client(monkeypatch, _extension(run))
+    url = f"/api/reading/materials/{material.material_id}/extensions/sample/actions/open"
+    assert client.post(url, json={"locator": 1}).status_code == 503
+    assert client.post(url, json={"locator": 1}).status_code == 200

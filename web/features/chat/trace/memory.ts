@@ -171,6 +171,7 @@ export function compactTracePreview(
 export function settleMessageTrace(
   events: StreamEvent[],
   turnId: string | null,
+  bounds?: MessageTraceMetadata,
 ): { events: StreamEvent[]; trace: MessageTraceMetadata } {
   const retracted = collectRetractedCallIds(events);
   let answerLength = 0;
@@ -197,9 +198,14 @@ export function settleMessageTrace(
     return event;
   });
   const preview = compactTracePreview(stamped);
-  const stamps = events
-    .map((event) => event.timestamp)
-    .filter((value): value is number => typeof value === "number");
+  const stamps = [
+    bounds?.started_at,
+    bounds?.ended_at,
+    ...events.map((event) => event.timestamp),
+  ].filter(
+    (value): value is number =>
+      typeof value === "number" && Number.isFinite(value),
+  );
   return {
     events: preview.events,
     trace: {

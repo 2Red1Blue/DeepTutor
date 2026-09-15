@@ -133,6 +133,8 @@ export interface SendMessageOptions {
 }
 
 export interface ChatState {
+  /** Local identity, available before the backend assigns a session ID. */
+  sessionKey: string;
   sessionId: string | null;
   sessionTitle: string;
   enabledTools: string[];
@@ -253,7 +255,7 @@ export interface MessageItem {
   parentMessageId?: number | null;
 }
 
-interface SessionEntry extends ChatState {
+interface SessionEntry extends Omit<ChatState, "sessionKey"> {
   key: string;
   status: SessionRuntimeStatus;
   activeTurnId: string | null;
@@ -318,7 +320,7 @@ type Action =
     }
   | { type: "POP_LAST_ASSISTANT"; key: string }
   | { type: "RESTORE_ASSISTANT"; key: string; message: MessageItem }
-  | { type: "STREAM_START"; key: string }
+  | { type: "STREAM_START"; key: string; startedAt: number }
   | { type: "STREAM_TOUCH"; key: string }
   | { type: "STREAM_EVENT"; key: string; event: StreamEvent }
   | {
@@ -693,6 +695,8 @@ function reducer(state: ProviderState, action: Action): ProviderState {
                 content: "",
                 rawContent: "",
                 events: [],
+                // Include connection and provider latency before the first frame (#1435).
+                trace: { started_at: action.startedAt },
                 capability: session.activeCapability || "",
                 parentMessageId: tip?.id ?? null,
               },
@@ -800,8 +804,12 @@ function reducer(state: ProviderState, action: Action): ProviderState {
         if (last?.role !== "assistant") return messages;
         const raw = last.rawContent ?? last.content ?? "";
         const repaired = repairChineseEmphasis(raw, ending.language);
-        if (repaired === last.content) return messages;
-        messages[messages.length - 1] = { ...last, content: repaired };
+        const trace =
+          ending.isStreaming && last.trace?.started_at != null
+            ? { ...last.trace, ended_at: Date.now() / 1000 }
+            : last.trace;
+        if (repaired === last.content && trace === last.trace) return messages;
+        messages[messages.length - 1] = { ...last, content: repaired, trace };
         return messages;
       })();
       const endedTurnId = action.turnId || ending?.activeTurnId || null;
@@ -914,6 +922,10 @@ function reducer(state: ProviderState, action: Action): ProviderState {
               action.masteryPathId !== undefined
                 ? action.masteryPathId
                 : existing.masteryPathId,
+            masterySessionMode:
+              action.masterySessionMode !== undefined
+                ? action.masterySessionMode
+                : existing.masterySessionMode,
             courseId:
               action.courseId !== undefined
                 ? action.courseId
@@ -1024,6 +1036,7 @@ function reducer(state: ProviderState, action: Action): ProviderState {
           const settled = settleMessageTrace(
             message.events ?? [],
             action.turnId,
+            message.trace,
           );
           return {
             ...message,
@@ -1039,6 +1052,7 @@ function reducer(state: ProviderState, action: Action): ProviderState {
           ...settleMessageTrace(
             message.events ?? [],
             message.trace?.turn_id ?? "",
+            message.trace,
           ),
         };
       });
@@ -1240,7 +1254,7 @@ interface ChatContextValue {
   /** Switch which sibling is currently visible at a branch point. */
   switchBranch: (parentMessageId: number | null, childId: number) => void;
   renameSessionTitle: (title: string) => Promise<void>;
-  newSession: (configuration?: SessionConfiguration) => void;
+  newSession: (configuration?: SessionConfiguration) => string;
   /** Apply route-owned preferences to an explicit loaded session (or the
    * selected draft). Dispatching by key keeps this safe immediately after
    * LOAD_SESSION, before React has committed a new context render. */
@@ -1992,6 +2006,7 @@ export function ChatStateAdapterProvider({
       options?: { signal?: AbortSignal; revalidate?: boolean },
     ) => {
       const session = await getSession(sessionId, options?.signal);
+      if (options?.signal?.aborted) return;
       const key = session.session_id || session.id;
       const activeTurn = Array.isArray(session.active_turns)
         ? session.active_turns[0]
@@ -2373,7 +2388,7 @@ export function ChatStateAdapterProvider({
           parentMessageId: localParentId,
         });
       }
-      dispatch({ type: "STREAM_START", key });
+      dispatch({ type: "STREAM_START", key, startedAt: Date.now() / 1000 });
       const {
         _persist_user_message: legacyPersistUserMessage,
         _course_id: _legacyCourseId,
@@ -2420,6 +2435,7 @@ export function ChatStateAdapterProvider({
         bookReferences: effectiveBookReferences,
         readingReferences: effectiveReadingReferences,
         masteryPathId: effectiveMasteryPathId || null,
+        masterySessionMode: effectiveMasterySessionMode || null,
         masteryAnswer: options?.masteryAnswer ?? null,
         masterySkip: options?.masterySkip ?? null,
         // Immersive reading. Gated on the stable workspace mode as well as on
@@ -2538,7 +2554,7 @@ export function ChatStateAdapterProvider({
       pendingRegenerateRef.current.delete(key);
     }
     dispatch({ type: "POP_LAST_ASSISTANT", key });
-    dispatch({ type: "STREAM_START", key });
+    dispatch({ type: "STREAM_START", key, startedAt: Date.now() / 1000 });
     sendThroughRunner(key, {
       type: "regenerate",
       session_id: session.sessionId,
@@ -2551,6 +2567,7 @@ export function ChatStateAdapterProvider({
   const derivedState = useMemo<ChatState>(() => {
     const current = ensureSelectedSession(state);
     return {
+      sessionKey: current.key,
       sessionId: current.sessionId,
       sessionTitle: current.sessionTitle,
       enabledTools: current.enabledTools,
@@ -2644,7 +2661,9 @@ export function ChatStateAdapterProvider({
 
   const newSession = useCallback(
     (configuration?: SessionConfiguration) => {
-      dispatch({ type: "NEW_SESSION", key: makeDraftKey(), configuration });
+      const key = makeDraftKey();
+      dispatch({ type: "NEW_SESSION", key, configuration });
+      return key;
     },
     [makeDraftKey],
   );

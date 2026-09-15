@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import re
 from typing import Any
 
@@ -20,6 +21,8 @@ from deeptutor.reading.extensions import (
     ReadingExtensionResult,
     get_reading_extension_registry,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 ACTION_TIMEOUT_S = 30
@@ -38,6 +41,18 @@ def _normal(value: str) -> str:
 def _verified_selection(candidate: str, unit_text: str) -> str:
     value = _normal(candidate)
     return value if value and value in _normal(unit_text) else ""
+
+
+def _discard_late_worker_result(worker: asyncio.Future) -> None:
+    """Retrieve abandoned worker failures and close unconsumed coroutines."""
+    if worker.cancelled():
+        return
+    try:
+        value = worker.result()
+        if inspect.iscoroutine(value):
+            value.close()
+    except Exception:
+        logger.exception("Reading extension worker failed after its request ended")
 
 
 @router.get("/extensions")
@@ -104,15 +119,20 @@ async def run_extension_action(
                 "recoverable": True,
             },
         )
+    # Only a still-running worker needs the circuit kept open (#1448).
+    # Async cancellation finishes before the reservation is released, including
+    # sync handlers that return an awaitable after their worker has finished.
+    worker: asyncio.Future | None = None
     try:
         async with asyncio.timeout(ACTION_TIMEOUT_S):
-            loop = asyncio.get_running_loop()
-            value = await loop.run_in_executor(
-                registry.executor_for(extension_id),
-                extension.run_action,
-                action,
-                context,
-            )
+            handler = extension.run_action
+            if inspect.iscoroutinefunction(handler):
+                value = await handler(action, context)
+            else:
+                worker = asyncio.get_running_loop().run_in_executor(
+                    registry.executor_for(extension_id), handler, action, context
+                )
+                value = await asyncio.shield(worker)
             if inspect.isawaitable(value):
                 value = await value
         result = (
@@ -124,7 +144,7 @@ async def run_extension_action(
             raise ValueError(f"Extension returned undeclared result type {result.type!r}.")
         return result.model_dump()
     except TimeoutError as exc:
-        registry.mark_timed_out(extension_id)
+        logger.warning("Reading extension %s action %s timed out", extension_id, action)
         raise HTTPException(
             status_code=503,
             detail={
@@ -133,6 +153,7 @@ async def run_extension_action(
             },
         ) from exc
     except Exception as exc:
+        logger.exception("Reading extension %s action %s failed", extension_id, action)
         raise HTTPException(
             status_code=503,
             detail={
@@ -141,6 +162,9 @@ async def run_extension_action(
             },
         ) from exc
     finally:
+        if worker is not None and not worker.done():
+            registry.mark_timed_out(extension_id)
+            worker.add_done_callback(_discard_late_worker_result)
         registry.finish_action(extension_id)
 
 
