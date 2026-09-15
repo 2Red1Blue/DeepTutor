@@ -160,6 +160,10 @@ export function ObjectiveDetail({
 function GateBar({ report }: { report: ObjectiveReport }) {
   const { t } = useTranslation();
   const qualitative = report.gate === "qualitative";
+  // A qualitative gate is a boolean, so all-or-nothing is the only honest
+  // fill. `mastery` carries quiz accuracy for these objectives too, and
+  // drawing that as gate progress is how a waypoint comes to show a full bar
+  // beside a hollow dot — the learner reads "100%, still not cleared".
   const pct = qualitative
     ? report.mastered
       ? 100

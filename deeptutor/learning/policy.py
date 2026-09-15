@@ -204,7 +204,14 @@ def find_knowledge_point(
     return None, "", ""
 
 
-def _gate_kind(kp: KnowledgePoint) -> str:
+def gate_kind(kp: KnowledgePoint) -> str:
+    """Which gate ``kp`` has to clear — ``qualitative`` or ``quantitative``.
+
+    Public because the tutor's tools report it too: a quiz attempt on a
+    qualitative objective moves ``mastery_levels`` without moving the gate,
+    so every surface that shows a mastery number has to be able to say which
+    kind of gate that number is being read against.
+    """
     return "qualitative" if kp.type in QUALITATIVE_TYPES else "quantitative"
 
 
@@ -233,7 +240,7 @@ def next_objective(
             knowledge_point_name=kp.name if kp else "",
             knowledge_point_type=kp.type.value if kp else "",
             status=objective_status(progress, kp) if kp else "learning",
-            gate=_gate_kind(kp) if kp else "",
+            gate=gate_kind(kp) if kp else "",
             mastery=display_mastery(progress, kp) if kp else 0.0,
             threshold=gate_threshold(kp.type) if kp else 0.0,
             reason="A posed question is awaiting the learner's answer; grade it with mastery_grade.",
@@ -255,7 +262,7 @@ def next_objective(
                 knowledge_point_name=kp.name,
                 knowledge_point_type=kp.type.value,
                 status=objective_status(progress, kp),
-                gate=_gate_kind(kp),
+                gate=gate_kind(kp),
                 mastery=display_mastery(progress, kp),
                 threshold=gate_threshold(kp.type),
                 reason=(task.reason or "This objective is due for spaced-repetition review."),
@@ -267,7 +274,7 @@ def next_objective(
             if is_mastered(progress, kp):
                 continue
             status = objective_status(progress, kp)
-            gate = _gate_kind(kp)
+            gate = gate_kind(kp)
             if status == "new":
                 action = "probe"
             elif gate == "qualitative":
@@ -430,7 +437,7 @@ def objective_report(
         "module_id": module_id,
         "module_name": module_name,
         "status": objective_status(progress, kp),
-        "gate": _gate_kind(kp),
+        "gate": gate_kind(kp),
         "mastered": is_mastered(progress, kp),
         "assessed_mastered": is_assessed_mastered(progress, kp),
         "mastery_source": mastery_source(progress, kp),
@@ -465,6 +472,7 @@ __all__ = [
     "QUANTITATIVE_GATE",
     "QUALITATIVE_TYPES",
     "NextStep",
+    "gate_kind",
     "gate_threshold",
     "is_assessed_mastered",
     "is_mastered",
