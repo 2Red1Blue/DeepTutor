@@ -25,6 +25,8 @@ export function ObjectiveDetail({
 }) {
   const { t } = useTranslation();
   const qualitative = report.gate === "qualitative";
+  const evidence = report.evidence ?? [];
+  const evidenceCount = report.evidence_count ?? evidence.length;
   return (
     <div className="mt-1 mb-2 ml-5 space-y-3 border-l border-[var(--border)] pl-3">
       <GateBar report={report} />
@@ -113,15 +115,15 @@ export function ObjectiveDetail({
         </Row>
       )}
 
-      {report.evidence.length > 0 && (
+      {evidence.length > 0 && (
         <div>
           <div className="text-xs text-[var(--muted-foreground)]">
             {t("Retention evidence ({{count}})", {
-              count: report.evidence_count,
+              count: evidenceCount,
             })}
           </div>
           <ul className="mt-1 space-y-1">
-            {report.evidence.map((evidence, index) => (
+            {evidence.map((evidence, index) => (
               <li
                 key={`${evidence.timestamp}-${evidence.turn_id || index}`}
                 className="flex items-center justify-between gap-2 text-[11px] text-[var(--muted-foreground)]"
@@ -135,7 +137,7 @@ export function ObjectiveDetail({
               </li>
             ))}
           </ul>
-          {report.evidence_count > report.evidence.length && (
+          {evidenceCount > evidence.length && (
             <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
               {t("Showing the latest 20 events")}
             </p>
@@ -157,7 +159,12 @@ export function ObjectiveDetail({
 /** Mastery against the gate it has to clear. */
 function GateBar({ report }: { report: ObjectiveReport }) {
   const { t } = useTranslation();
-  const pct = Math.round(report.mastery * 100);
+  const qualitative = report.gate === "qualitative";
+  const pct = qualitative
+    ? report.mastered
+      ? 100
+      : 0
+    : Math.round(report.mastery * 100);
   const thresholdPct = Math.round(report.threshold * 100);
   const perfectButBelowGate =
     report.gate === "quantitative" &&
@@ -199,6 +206,13 @@ function GateBar({ report }: { report: ObjectiveReport }) {
           {t(
             "Even with {{correct}}/{{total}} correct so far, mastery also weighs evidence volume, difficulty, and recent consistency. One more discriminating practice can raise it further.",
             { correct: report.correct_count, total: report.attempts.length },
+          )}
+        </p>
+      )}
+      {qualitative && !report.mastered && report.attempts.length > 0 && (
+        <p className="mt-1.5 text-[11px] leading-4 text-[var(--muted-foreground)]">
+          {t(
+            "Practice questions do not open this gate — it opens when you explain the idea in your own words and your tutor records that. Your answers here still count as practice.",
           )}
         </p>
       )}

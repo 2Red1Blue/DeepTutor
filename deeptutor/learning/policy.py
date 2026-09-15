@@ -258,9 +258,7 @@ def next_objective(
                 gate=_gate_kind(kp),
                 mastery=display_mastery(progress, kp),
                 threshold=gate_threshold(kp.type),
-                reason=(
-                    task.reason or "This objective is due for spaced-repetition review."
-                ),
+                reason=(task.reason or "This objective is due for spaced-repetition review."),
                 forgetting_risk=task.forgetting_risk,
             )
 
@@ -387,8 +385,7 @@ def _review_report(
         "recent_failure": bool(
             state.consecutive_wrong
             or any(
-                record.knowledge_point_id == kp_id
-                and record.status in ("active", "retrying")
+                record.knowledge_point_id == kp_id and record.status in ("active", "retrying")
                 for record in progress.error_records
             )
         ),

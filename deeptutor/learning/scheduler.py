@@ -262,18 +262,12 @@ class SpacedRepetitionScheduler:
             parts.append(f"due in {_format_span(-delta / unit)}")
         desired = state.desired_retention or DEFAULT_DESIRED_RETENTION
         if recall + 1e-9 < desired:
-            parts.append(
-                f"retrievability {recall:.0%} below {desired:.0%} target"
-            )
+            parts.append(f"retrievability {recall:.0%} below {desired:.0%} target")
         else:
             parts.append(f"retrievability {recall:.0%}")
-        failures = state.consecutive_wrong + (
-            1 if kp_id in _error_kp_ids(progress) else 0
-        )
+        failures = state.consecutive_wrong + (1 if kp_id in _error_kp_ids(progress) else 0)
         if state.lapse_count:
-            parts.append(
-                f"{state.lapse_count} lapse{'s' if state.lapse_count != 1 else ''}"
-            )
+            parts.append(f"{state.lapse_count} lapse{'s' if state.lapse_count != 1 else ''}")
         elif failures:
             parts.append("recent failure")
         return "; ".join(parts) + "."

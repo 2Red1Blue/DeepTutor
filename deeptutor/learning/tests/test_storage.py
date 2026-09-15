@@ -116,10 +116,13 @@ class TestSaveLoad:
         assert len(evidence) == 1
         assert evidence[0].result == "incorrect"
         with sqlite3.connect(store.db_path) as conn:
-            assert conn.execute(
-                "SELECT COUNT(*) FROM mastery_learning_evidence WHERE path_id = ?",
-                ("evidence-index",),
-            ).fetchone()[0] == 2
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM mastery_learning_evidence WHERE path_id = ?",
+                    ("evidence-index",),
+                ).fetchone()[0]
+                == 2
+            )
 
     def test_legacy_json_without_retention_fields_imports(self, store, tmp_path):
         legacy_path = tmp_path / "old-srs.json"

@@ -287,8 +287,11 @@ export interface ObjectiveReport {
   correct_count: number;
   explanation: string;
   review: ObjectiveReview | null;
-  evidence: LearningEvidence[];
-  evidence_count: number;
+  // These fields were added after the initial objective report contract.
+  // Keep them optional so older API responses and embedded consumers remain
+  // readable while the current server includes both values.
+  evidence?: LearningEvidence[];
+  evidence_count?: number;
   errors: ObjectiveErrorRecord[];
 }
 

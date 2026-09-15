@@ -114,9 +114,7 @@ class LearningService:
             if attempt.knowledge_point_id in new_kp_ids
         ]
         progress.learning_evidence = [
-            event
-            for event in progress.learning_evidence
-            if event.knowledge_point_id in new_kp_ids
+            event for event in progress.learning_evidence if event.knowledge_point_id in new_kp_ids
         ]
         progress.feynman_retries = {
             k: v for k, v in progress.feynman_retries.items() if k in new_kp_ids

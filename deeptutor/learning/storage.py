@@ -518,11 +518,15 @@ class LearningStore:
                     (migration,),
                 ).fetchone()
                 if already_applied is None:
-                    for row in conn.execute("SELECT path_id, state_json FROM mastery_paths").fetchall():
+                    for row in conn.execute(
+                        "SELECT path_id, state_json FROM mastery_paths"
+                    ).fetchall():
                         try:
                             progress = self._progress_from_row(row)
                         except (TypeError, ValueError, ValidationError, json.JSONDecodeError):
-                            logger.warning("Skipping evidence projection for invalid path %s", row["path_id"])
+                            logger.warning(
+                                "Skipping evidence projection for invalid path %s", row["path_id"]
+                            )
                             continue
                         self._sync_evidence_projection(conn, str(row["path_id"]), progress)
                     conn.execute(
@@ -868,13 +872,14 @@ class LearningStore:
             ).fetchone()
         return (
             self._progress_from_row(row),
-            [LearningEvidence.model_validate(json.loads(item["evidence_json"])) for item in evidence_rows],
+            [
+                LearningEvidence.model_validate(json.loads(item["evidence_json"]))
+                for item in evidence_rows
+            ],
             int(count_row["count"] if count_row else 0),
         )
 
-    def count_learning_evidence(
-        self, book_id: str, knowledge_point_id: str | None = None
-    ) -> int:
+    def count_learning_evidence(self, book_id: str, knowledge_point_id: str | None = None) -> int:
         path_id = self._validate_id(book_id)
         self._import_legacy_if_needed(path_id)
         if knowledge_point_id:

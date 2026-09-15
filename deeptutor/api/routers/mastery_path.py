@@ -269,7 +269,9 @@ def _review_queue(progress, *, now: float | None = None) -> list[dict]:
                 )
             ),
         }
-        for task in sorted(progress.review_queue, key=lambda item: review_sort_key(item, now=moment))
+        for task in sorted(
+            progress.review_queue, key=lambda item: review_sort_key(item, now=moment)
+        )
     ]
 
 
@@ -279,9 +281,7 @@ def _read_projection(progress, *, now: float | None = None):
 
     projected = progress.model_copy(deep=True)
     moment = time.time() if now is None else now
-    projected.review_queue = SpacedRepetitionScheduler().build_review_queue(
-        projected, now=moment
-    )
+    projected.review_queue = SpacedRepetitionScheduler().build_review_queue(projected, now=moment)
     return projected
 
 
