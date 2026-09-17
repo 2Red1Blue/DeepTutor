@@ -1134,11 +1134,12 @@ class MasteryGradeTool(BaseTool):
         # best-effort sync timed out, a safe retry repairs the auxiliary
         # question bank without duplicating the mastery attempt.
         kp, _, _ = find_knowledge_point(progress, pending.knowledge_point_id)
+        evidence_items = getattr(progress, "learning_evidence", None) or ()
         evidence = next(
             (
                 item
-                for item in reversed(progress.learning_evidence)
-                if item.knowledge_point_id == pending.knowledge_point_id
+                for item in reversed(evidence_items)
+                if getattr(item, "knowledge_point_id", "") == pending.knowledge_point_id
             ),
             None,
         )
@@ -1155,11 +1156,11 @@ class MasteryGradeTool(BaseTool):
             correct_answer=expected_answer,
             material_title=progress.name,
             section_title=kp.name if kp else "",
-            attempt_count=evidence.attempt_count if evidence is not None else 1,
-            hints_used=evidence.hints_used if evidence is not None else 0,
-            confidence=evidence.confidence if evidence is not None else None,
-            response_time=evidence.response_time if evidence is not None else None,
-            quality=evidence.quality if evidence is not None else None,
+            attempt_count=getattr(evidence, "attempt_count", 1) if evidence is not None else 1,
+            hints_used=getattr(evidence, "hints_used", 0) if evidence is not None else 0,
+            confidence=getattr(evidence, "confidence", None) if evidence is not None else None,
+            response_time=getattr(evidence, "response_time", None) if evidence is not None else None,
+            quality=getattr(evidence, "quality", None) if evidence is not None else None,
         )
         mastered = bool(kp and is_mastered(progress, kp))
         gate = gate_kind(kp) if kp else ""
