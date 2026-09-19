@@ -3667,7 +3667,13 @@
   "Needs Review": "Needs Review",
   "All Sources": "All Sources",
   "Deep Question": "Deep Question",
+  "Unknown Source": "Unknown Source",
   "Book": "Book",
+  "Assessment Type": "Assessment Type",
+  "Focus Check": "Focus Check",
+  "Qualitative": "Qualitative",
+  "Partially Correct": "Partially Correct",
+  "Not Graded": "Not Graded",
   "Partner Chat": "Partner Chat",
   "All Materials": "All Materials",
   "Score Trend": "Score Trend",
@@ -4065,5 +4071,6 @@
   "The Invidious instance could not verify your account. Check the instance and reconnect.": "The Invidious instance could not verify your account. Check the instance and reconnect.",
   "Your DeepTutor login expired during authorization. Sign in, then start a new Invidious connection.": "Your DeepTutor login expired during authorization. Sign in, then start a new Invidious connection.",
   "The account could not be connected. Please start a new connection.": "The account could not be connected. Please start a new connection.",
-  "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.": "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate."
+  "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.": "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.",
+  "Failed to save answer. Please try again.": "Failed to save answer. Please try again."
 }

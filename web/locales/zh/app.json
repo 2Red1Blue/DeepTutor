@@ -3667,7 +3667,13 @@
   "Needs Review": "待复习",
   "All Sources": "全部来源",
   "Deep Question": "深度提问",
+  "Unknown Source": "未知来源",
   "Book": "书籍",
+  "Assessment Type": "评估类型",
+  "Focus Check": "专注检测",
+  "Qualitative": "定性评估",
+  "Partially Correct": "部分正确",
+  "Not Graded": "未评分",
   "Partner Chat": "伙伴对话",
   "All Materials": "全部材料",
   "Score Trend": "得分趋势",
@@ -4065,5 +4071,6 @@
   "The Invidious instance could not verify your account. Check the instance and reconnect.": "Invidious 实例暂时无法验证账号，请检查实例后重新关联。",
   "Your DeepTutor login expired during authorization. Sign in, then start a new Invidious connection.": "授权期间 DeepTutor 登录已失效，请先登录 DeepTutor，再重新关联 Invidious。",
   "The account could not be connected. Please start a new connection.": "账号关联失败，请重新发起关联。",
-  "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.": "请使用 Invidious 账号登录，确认只读授权后会自动返回此页。DeepTutor 与 Invidious 使用各自的登录账号。"
+  "Sign in with your Invidious account, then approve read-only access to return here. Your DeepTutor login is separate.": "请使用 Invidious 账号登录，确认只读授权后会自动返回此页。DeepTutor 与 Invidious 使用各自的登录账号。",
+  "Failed to save answer. Please try again.": "答案保存失败，请重试。"
 }
