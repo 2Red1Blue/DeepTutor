@@ -18,7 +18,9 @@ from deeptutor.services.storage import get_attachment_store
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-AssessmentSource = Literal["deep_question", "mastery_path", "immersive_reading", "book"]
+AssessmentSource = Literal[
+    "deep_question", "mastery_path", "immersive_reading", "book", "partner_chat"
+]
 ScoreTrend = Literal["new", "improved", "declined", "unchanged"]
 
 
@@ -283,9 +285,7 @@ async def list_entries(
     bookmarked: bool | None = Query(default=None),
     is_correct: bool | None = Query(default=None),
     course_id: str = Query(default=""),
-    source: str = Query(
-        default="", pattern="^(deep_question|mastery_path|immersive_reading|book)?$"
-    ),
+    source: AssessmentSource | Literal[""] = Query(default=""),
     material_id: str = Query(default="", max_length=500),
     section_id: str = Query(default="", max_length=500),
     resolved: bool | None = Query(default=None),
