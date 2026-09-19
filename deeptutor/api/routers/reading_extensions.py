@@ -7,6 +7,7 @@ import inspect
 import logging
 import re
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -56,7 +57,7 @@ class QuizAnswerItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     question_id: str = Field(min_length=1)
-    selected_index: int
+    selected_index: int = Field(ge=0)
 
 
 class QuizAnswersPayload(BaseModel):
@@ -236,17 +237,14 @@ async def _persist_reading_quiz_pending(
     questions = payload.get("questions")
     if not isinstance(questions, list) or not questions:
         return
-    try:
-        from deeptutor.services.session import get_sqlite_session_store
+    from deeptutor.services.session import get_sqlite_session_store
 
-        await get_sqlite_session_store().put_reading_quiz_pending(material_id, locator, questions)
-    except Exception:
-        logger.warning(
-            "Failed to persist reading quiz keys for material %s locator %s",
-            material_id,
-            locator,
-            exc_info=True,
-        )
+    # A regenerated quiz must not reuse q_1 and grade an old card against a new key.
+    quiz_id = uuid4().hex
+    for index, question in enumerate(questions):
+        if isinstance(question, dict):
+            question["id"] = f"{quiz_id}:{index}"
+    await get_sqlite_session_store().put_reading_quiz_pending(material_id, locator, questions)
 
 
 @router.post("/materials/{material_id}/extensions/quiz/answers")
@@ -271,11 +269,34 @@ async def submit_quiz_answers(material_id: str, payload: QuizAnswersPayload) -> 
     if missing:
         raise HTTPException(status_code=409, detail="This reading quiz has expired.")
 
+    # Validate the entire batch before saving any answers.
+    for item in payload.answers:
+        question = pending[item.question_id.strip()]
+        choices = question.get("choices")
+        correct_index = question.get("correct_choice_index")
+        if (
+            not isinstance(choices, list)
+            or type(correct_index) is not int
+            or not 0 <= correct_index < len(choices)
+        ):
+            raise HTTPException(
+                status_code=409, detail="This reading quiz has an invalid answer key."
+            )
+        if item.selected_index >= len(choices):
+            raise HTTPException(status_code=422, detail="Selected answer is outside the choices.")
+
     session_id = payload.session_id.strip()
-    persist = bool(session_id) and await store.get_session(session_id) is not None
-    turn_id = payload.turn_id.strip() or f"loc:{payload.locator}"
     section_title = payload.section_title.strip() or payload.source_anchor.strip()
     material_title = _material_title(material_id)
+    if session_id:
+        if await store.get_session(session_id) is None:
+            raise HTTPException(status_code=404, detail="Reading session not found.")
+    else:
+        # A notebook container keeps standalone reading quizzes without requiring
+        # the learner to open a conversation first; it holds no invented messages.
+        session_id = f"reading-notebook:{material_id}"
+        await store.ensure_notebook_session(session_id, material_title or "Reading quiz")
+    turn_id = payload.turn_id.strip() or f"reading:{material_id}:loc:{payload.locator}"
     graded: list[dict[str, Any]] = []
     for item in payload.answers:
         question = pending[item.question_id.strip()]
@@ -291,30 +312,29 @@ async def submit_quiz_answers(material_id: str, payload: QuizAnswersPayload) -> 
             str(choices[item.selected_index]) if 0 <= item.selected_index < len(choices) else ""
         )
         correct_text = str(choices[correct_index]) if 0 <= correct_index < len(choices) else ""
-        if persist:
-            try:
-                await record_assessment(
-                    AssessmentRecord(
-                        session_id=session_id,
-                        turn_id=turn_id,
-                        question_id=item.question_id.strip(),
-                        question=str(question.get("prompt") or "Reading quiz"),
-                        question_type="choice",
-                        options=options,
-                        user_answer=selected_text,
-                        correct_answer=correct_text,
-                        is_correct=is_correct,
-                        result=result,
-                        source="immersive_reading",
-                        assessment_type="focus_check",
-                        material_id=material_id,
-                        material_title=material_title,
-                        section_id=str(payload.locator),
-                        section_title=section_title,
-                    )
+        try:
+            await record_assessment(
+                AssessmentRecord(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    question_id=item.question_id.strip(),
+                    question=str(question.get("prompt") or "Reading quiz"),
+                    question_type="choice",
+                    options=options,
+                    user_answer=selected_text,
+                    correct_answer=correct_text,
+                    is_correct=is_correct,
+                    result=result,
+                    source="immersive_reading",
+                    assessment_type="focus_check",
+                    material_id=material_id,
+                    material_title=material_title,
+                    section_id=str(payload.locator),
+                    section_title=section_title,
                 )
-            except RecordAssessmentError as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            )
+        except RecordAssessmentError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         graded.append(
             {
                 "question_id": item.question_id.strip(),

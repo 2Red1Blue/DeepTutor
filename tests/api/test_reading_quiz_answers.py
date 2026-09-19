@@ -3,8 +3,7 @@
 The endpoint is where browser-graded reading quizzes become durable review
 records: the server grades each submission against its own stored answer key
 (the browser sends only the chosen index), records ``immersive_reading``
-entries into the unified Question Notebook, and never fabricates data when no
-real conversation exists.
+entries into the unified Question Notebook, and retains standalone quizzes without requiring a chat.
 """
 
 from __future__ import annotations
@@ -137,7 +136,7 @@ def test_focus_check_entries_land_in_unified_list(
     assert by_id["q_2"]["user_answer"] == "3"
 
 
-def test_no_session_degrades_without_fabricating_data(store: SQLiteSessionStore) -> None:
+def test_no_session_saves_in_a_reading_notebook_container(store: SQLiteSessionStore) -> None:
     asyncio.run(store.put_reading_quiz_pending(MATERIAL_ID, LOCATOR, _quiz_questions()))
     with TestClient(_build_app(store)) as client:
         resp = client.post(
@@ -147,7 +146,8 @@ def test_no_session_degrades_without_fabricating_data(store: SQLiteSessionStore)
     assert resp.status_code == 200
     assert resp.json()["answers"][0]["is_correct"] is True
     listing = asyncio.run(store.list_notebook_entries())
-    assert listing["total"] == 0
+    assert listing["total"] == 2
+    assert {item["session_id"] for item in listing["items"]} == {f"reading-notebook:{MATERIAL_ID}"}
 
 
 def test_missing_answer_key_is_409(store: SQLiteSessionStore) -> None:
@@ -190,3 +190,68 @@ def test_repeat_submission_is_idempotent(store: SQLiteSessionStore) -> None:
     assert first.status_code == second.status_code == 200
     listing = asyncio.run(store.list_notebook_entries(session_id="reading-session"))
     assert listing["total"] == 2
+
+
+@pytest.mark.parametrize("selected_index", [-1, 2])
+def test_invalid_selection_does_not_save_any_part_of_batch(store, selected_index):
+    asyncio.run(store.put_reading_quiz_pending(MATERIAL_ID, LOCATOR, _quiz_questions()))
+    with TestClient(_build_app(store)) as client:
+        response = client.post(
+            f"/api/reading/materials/{MATERIAL_ID}/extensions/quiz/answers",
+            json=_payload(session_id="", answers=_answers(("q_2", 1), ("q_1", selected_index))),
+        )
+    assert response.status_code == 422
+    assert asyncio.run(store.list_notebook_entries())["total"] == 0
+
+
+def test_missing_explicit_session_is_an_error(store):
+    asyncio.run(store.put_reading_quiz_pending(MATERIAL_ID, LOCATOR, _quiz_questions()))
+    with TestClient(_build_app(store)) as client:
+        response = client.post(
+            f"/api/reading/materials/{MATERIAL_ID}/extensions/quiz/answers", json=_payload()
+        )
+    assert response.status_code == 404
+    assert asyncio.run(store.list_notebook_entries())["total"] == 0
+
+
+def test_invalid_answer_key_is_not_graded(store):
+    questions = _quiz_questions()
+    questions[0]["correct_choice_index"] = -1
+    asyncio.run(store.put_reading_quiz_pending(MATERIAL_ID, LOCATOR, questions))
+    with TestClient(_build_app(store)) as client:
+        response = client.post(
+            f"/api/reading/materials/{MATERIAL_ID}/extensions/quiz/answers",
+            json=_payload(session_id=""),
+        )
+    assert response.status_code == 409
+    assert asyncio.run(store.list_notebook_entries())["total"] == 0
+
+
+def test_regenerated_quiz_rejects_the_previous_cards(store):
+    persist = importlib.import_module(
+        "deeptutor.api.routers.reading_extensions"
+    )._persist_reading_quiz_pending
+    first = {"questions": _quiz_questions()}
+    second = {"questions": _quiz_questions()}
+    asyncio.run(persist(MATERIAL_ID, LOCATOR, first))
+    asyncio.run(persist(MATERIAL_ID, LOCATOR, second))
+    old_id = first["questions"][0]["id"]
+    assert old_id != second["questions"][0]["id"]
+    with TestClient(_build_app(store)) as client:
+        response = client.post(
+            f"/api/reading/materials/{MATERIAL_ID}/extensions/quiz/answers",
+            json=_payload(session_id="", answers=_answers((old_id, 1))),
+        )
+    assert response.status_code == 409
+
+
+def test_standalone_submission_retry_keeps_one_container_and_one_record(store):
+    asyncio.run(store.put_reading_quiz_pending(MATERIAL_ID, LOCATOR, _quiz_questions()))
+    with TestClient(_build_app(store)) as client:
+        for _ in range(2):
+            response = client.post(
+                f"/api/reading/materials/{MATERIAL_ID}/extensions/quiz/answers",
+                json=_payload(session_id="", answers=_answers(("q_1", 1))),
+            )
+            assert response.status_code == 200
+    assert asyncio.run(store.list_notebook_entries())["total"] == 1

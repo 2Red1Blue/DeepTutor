@@ -140,7 +140,7 @@ test("reading quizzes reveal grading only after the learner answers", () => {
   assert.match(component, /correct_choice_index\?: number/);
   assert.match(component, /const \[answers, setAnswers\] = useState/);
   assert.match(component, /aria-pressed=\{selected === choiceIndex\}/);
-  assert.match(component, /selected === correctChoiceIndex/);
+  assert.match(component, /verdicts\[key\]/);
   assert.match(component, /t\("Correct"\).*t\("Incorrect"\)/s);
 });
 

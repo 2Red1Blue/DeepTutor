@@ -22,6 +22,7 @@ try:  # POSIX is the supported production target; fallback keeps Windows dev usa
 except ImportError:  # pragma: no cover - exercised only on Windows
     fcntl = None  # type: ignore[assignment]
 
+from deeptutor.core.assessment import ASSESSMENT_RESULTS, ASSESSMENT_SOURCES, ASSESSMENT_TYPES
 from deeptutor.services.path_service import get_path_service
 from deeptutor.services.session.protocol import ActiveTurnConflict
 from deeptutor.utils.secret_files import ensure_private_directory, ensure_private_file
@@ -98,11 +99,6 @@ def _json_loads(value: str | None, default: Any) -> Any:
 # this id prefix as their discriminator (see ``SQLiteSessionStore._WHERE_*``).
 _IMPORTED_ID_PREFIX = "imported_"
 _ID_SAFE = re.compile(r"[^A-Za-z0-9_-]")
-ASSESSMENT_SOURCES = frozenset(
-    {"deep_question", "mastery_path", "immersive_reading", "book", "partner_chat"}
-)
-ASSESSMENT_TYPES = frozenset({"quiz", "focus_check", "qualitative", "review"})
-ASSESSMENT_RESULTS = frozenset({"correct", "incorrect", "partial", "ungraded"})
 SCORE_TRENDS = frozenset({"new", "improved", "declined", "unchanged"})
 # Stored ``result=''`` is a pre-v2 row: treat it as already graded so wrong
 # lists do not swallow ungraded spectacle rows, and old incorrect rows stay

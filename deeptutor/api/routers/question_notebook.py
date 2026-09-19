@@ -12,19 +12,14 @@ import uuid as _uuid
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
+from deeptutor.core.assessment import AssessmentResult, AssessmentSource
 from deeptutor.services.session import get_sqlite_session_store
 from deeptutor.services.storage import get_attachment_store
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-AssessmentSource = Literal[
-    "deep_question", "mastery_path", "immersive_reading", "book", "partner_chat"
-]
 ScoreTrend = Literal["new", "improved", "declined", "unchanged"]
-AssessmentType = Literal["quiz", "focus_check", "qualitative", "review"]
-AssessmentResult = Literal["correct", "incorrect", "partial", "ungraded"]
-
 
 # ── Models ────────────────────────────────────────────────────────
 

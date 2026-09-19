@@ -360,8 +360,8 @@ export interface ReadingQuizAnswerVerdict {
 /**
  * Persist a reading Focus-Check on the server.
  *
- * The browser never sends the answer key — only the chosen index. Instant
- * local feedback stays on the existing quiz card.
+ * The browser sends only the chosen index and shows the server's verdict
+ * after the answer has been saved successfully.
  */
 export async function submitReadingQuizAnswers(
   materialId: string,

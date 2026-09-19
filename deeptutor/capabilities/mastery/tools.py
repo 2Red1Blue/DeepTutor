@@ -1159,7 +1159,9 @@ class MasteryGradeTool(BaseTool):
             attempt_count=getattr(evidence, "attempt_count", 1) if evidence is not None else 1,
             hints_used=getattr(evidence, "hints_used", 0) if evidence is not None else 0,
             confidence=getattr(evidence, "confidence", None) if evidence is not None else None,
-            response_time=getattr(evidence, "response_time", None) if evidence is not None else None,
+            response_time=getattr(evidence, "response_time", None)
+            if evidence is not None
+            else None,
             quality=getattr(evidence, "quality", None) if evidence is not None else None,
         )
         mastered = bool(kp and is_mastered(progress, kp))

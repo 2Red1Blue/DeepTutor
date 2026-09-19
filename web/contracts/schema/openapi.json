@@ -6235,6 +6235,7 @@
             "type": "string"
           },
           "selected_index": {
+            "minimum": 0.0,
             "title": "Selected Index",
             "type": "integer"
           }

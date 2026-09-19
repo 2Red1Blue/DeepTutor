@@ -12,21 +12,20 @@ from __future__ import annotations
 from hashlib import sha1
 import logging
 import time
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-logger = logging.getLogger(__name__)
-
-AssessmentSource = Literal["deep_question", "mastery_path", "immersive_reading", "book"]
-AssessmentType = Literal["quiz", "focus_check", "qualitative", "review"]
-AssessmentResult = Literal["correct", "incorrect", "partial", "ungraded"]
-
-ASSESSMENT_SOURCES: frozenset[str] = frozenset(
-    {"deep_question", "mastery_path", "immersive_reading", "book"}
+from deeptutor.core.assessment import (
+    ASSESSMENT_RESULTS,
+    ASSESSMENT_SOURCES,
+    ASSESSMENT_TYPES,
+    AssessmentResult,
+    AssessmentSource,
+    AssessmentType,
 )
-ASSESSMENT_TYPES: frozenset[str] = frozenset({"quiz", "focus_check", "qualitative", "review"})
-ASSESSMENT_RESULTS: frozenset[str] = frozenset({"correct", "incorrect", "partial", "ungraded"})
+
+logger = logging.getLogger(__name__)
 
 
 class RecordAssessmentError(RuntimeError):
