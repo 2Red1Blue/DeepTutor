@@ -5542,7 +5542,8 @@
               "deep_question",
               "mastery_path",
               "immersive_reading",
-              "book"
+              "book",
+              "partner_chat"
             ],
             "title": "Source",
             "type": "string"
@@ -9612,7 +9613,8 @@
               "deep_question",
               "mastery_path",
               "immersive_reading",
-              "book"
+              "book",
+              "partner_chat"
             ],
             "title": "Source",
             "type": "string"
@@ -34648,10 +34650,24 @@
             "name": "source",
             "required": false,
             "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "deep_question",
+                    "mastery_path",
+                    "immersive_reading",
+                    "book",
+                    "partner_chat"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "const": "",
+                  "type": "string"
+                }
+              ],
               "default": "",
-              "pattern": "^(deep_question|mastery_path|immersive_reading|book)?$",
-              "title": "Source",
-              "type": "string"
+              "title": "Source"
             }
           },
           {

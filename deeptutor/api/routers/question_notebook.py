@@ -285,9 +285,7 @@ async def list_entries(
     bookmarked: bool | None = Query(default=None),
     is_correct: bool | None = Query(default=None),
     course_id: str = Query(default=""),
-    source: str = Query(
-        default="", pattern="^(deep_question|mastery_path|immersive_reading|book)?$"
-    ),
+    source: AssessmentSource | Literal[""] = Query(default=""),
     material_id: str = Query(default="", max_length=500),
     section_id: str = Query(default="", max_length=500),
     resolved: bool | None = Query(default=None),
