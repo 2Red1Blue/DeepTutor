@@ -248,7 +248,8 @@ export type AssessmentSource =
   | "deep_question"
   | "mastery_path"
   | "immersive_reading"
-  | "book";
+  | "book"
+  | "partner_chat";
 
 export type AssessmentType = "quiz" | "focus_check" | "qualitative" | "review";
 

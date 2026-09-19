@@ -11889,7 +11889,11 @@ export interface components {
        * @enum {string}
        */
       readonly source:
-        "deep_question" | "mastery_path" | "immersive_reading" | "book";
+        | "deep_question"
+        | "mastery_path"
+        | "immersive_reading"
+        | "book"
+        | "partner_chat";
       /**
        * Turn Id
        * @default
@@ -13664,7 +13668,11 @@ export interface components {
        * @enum {string}
        */
       readonly source:
-        "deep_question" | "mastery_path" | "immersive_reading" | "book";
+        | "deep_question"
+        | "mastery_path"
+        | "immersive_reading"
+        | "book"
+        | "partner_chat";
       /**
        * Turn Id
        * @default
@@ -26210,7 +26218,15 @@ export interface operations {
         readonly search?: string;
         readonly section_id?: string;
         readonly sort?: string;
-        readonly source?: string;
+        readonly source?:
+          | (
+              | "deep_question"
+              | "mastery_path"
+              | "immersive_reading"
+              | "book"
+              | "partner_chat"
+            )
+          | "";
         /** @description Only entries filed under no category — the triage inbox. Ignored when category_id is set. */
         readonly uncategorized?: boolean;
       };
