@@ -277,6 +277,14 @@ class LearningService:
         is_correct = bool(expected_answer) and grade_answer(
             user_answer, expected_answer, question_type
         )
+        # Capture the active retry before recording this answer graduates it.
+        # Past retries on this or another question must not weaken later reviews.
+        retrying = any(
+            rec.question_id == question_id
+            and rec.knowledge_point_id == knowledge_point_id
+            and rec.status in ("active", "retrying")
+            for rec in progress.error_records
+        )
         already_scheduled = knowledge_point_id in progress.repetition_states
         self.record_quiz_attempt(
             progress,
@@ -296,6 +304,7 @@ class LearningService:
                 progress,
                 knowledge_point_id,
                 is_correct=is_correct,
+                retrying=retrying,
                 session_id=session_id,
                 turn_id=turn_id,
                 assessment_type="review" if already_scheduled else "quiz",
@@ -313,21 +322,13 @@ class LearningService:
                 progress.review_queue = scheduler.build_review_queue(progress)
         return is_correct
 
-    @staticmethod
-    def _quiz_review_quality(progress: LearningProgress, kp_id: str, *, is_correct: bool) -> float:
-        if not is_correct:
-            return 0.0
-        for rec in progress.error_records:
-            if rec.knowledge_point_id == kp_id and rec.retry_history:
-                return 0.6
-        return 1.0
-
     def _record_quiz_evidence(
         self,
         progress: LearningProgress,
         kp_id: str,
         *,
         is_correct: bool,
+        retrying: bool = False,
         session_id: str = "",
         turn_id: str = "",
         assessment_type: Literal["quiz", "qualitative", "review"] = "quiz",
@@ -339,7 +340,7 @@ class LearningService:
             knowledge_point_id=kp_id,
             assessment_type=assessment_type,
             result="correct" if is_correct else "incorrect",
-            quality=self._quiz_review_quality(progress, kp_id, is_correct=is_correct),
+            quality=(0.6 if retrying else 1.0) if is_correct else 0.0,
             attempt_count=max(1, attempt_count),
             session_id=session_id,
             turn_id=turn_id,

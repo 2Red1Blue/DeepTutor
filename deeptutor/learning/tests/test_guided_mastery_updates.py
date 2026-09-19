@@ -431,3 +431,38 @@ def test_grade_interaction_persists_evidence_and_emits_event(tmp_path):
     assert progress.learning_evidence[-1].turn_id == "turn-1"
     assert progress.learning_evidence[-1].quality == 1.0
     assert any(event.event_type == "evidence.recorded" for event in store.list_events("book1"))
+
+
+@pytest.mark.parametrize("review_question", ["q1", "q2"])
+def test_graduated_retry_does_not_weaken_later_independent_review(tmp_path, review_question):
+    service = LearningService(LearningStore(root=tmp_path))
+    progress = _make_progress()
+    for question_id, answer in [("q1", "london"), ("q1", "paris"), (review_question, "paris")]:
+        service.grade_and_record(
+            progress,
+            question_id=question_id,
+            knowledge_point_id="kp1",
+            module_id="m1",
+            user_answer=answer,
+            expected_answer="paris",
+        )
+    assert progress.error_records[0].status == "graduated"
+    assert [event.quality for event in progress.learning_evidence] == [0.0, 0.6, 1.0]
+    restored = service.store.load(progress.book_id)
+    assert restored.learning_evidence[-1].quality == 1.0
+
+
+def test_active_error_on_another_question_does_not_weaken_correct_answer(tmp_path):
+    service = LearningService(LearningStore(root=tmp_path))
+    progress = _make_progress()
+    for question_id, answer in [("q1", "london"), ("q1", "london"), ("q2", "paris")]:
+        service.grade_and_record(
+            progress,
+            question_id=question_id,
+            knowledge_point_id="kp1",
+            module_id="m1",
+            user_answer=answer,
+            expected_answer="paris",
+        )
+    assert progress.error_records[0].status == "retrying"
+    assert [event.quality for event in progress.learning_evidence] == [0.0, 0.0, 1.0]
