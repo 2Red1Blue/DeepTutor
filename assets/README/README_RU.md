@@ -390,6 +390,8 @@ DeepTutor отделяет установленный код, приватное
 <img src="../../assets/figs/web-1.6.5/OVERVIEW.png" alt="Главная страница DeepTutor — рабочее пространство чата со всеми поверхностями на боковой панели" width="900">
 </div>
 
+> **Состояние скриншотов:** общий обзор обновлен для v1.6.5. Скриншоты поверхностей ниже остаются справочными изображениями v1.4.6 до завершения обновления; см. [перечень скриншотов](../../UI_SCREENSHOT_REFRESH.md). Используйте их для понимания рабочих процессов, а не как точную текущую навигацию.
+
 <details>
 <summary><b>🏗️ Архитектура системы</b></summary>
 
@@ -414,7 +416,7 @@ DeepTutor отделяет установленный код, приватное
 <img src="../../assets/figs/system/chat-agent-loop.png" alt="Цикл агента чата DeepTutor" width="900">
 </div>
 
-Переключаемые пользователем инструменты: `brainstorm`, `web_search`, `paper_search`, `reason` и `geogebra_analysis` — плюс `imagegen` и `videogen` после настройки соответствующей генеративной модели. Контекстные инструменты, такие как `rag`, `kb_files`, `read_source`, `read_memory`, `write_memory`, `read_skill`, `load_tools`, `exec`, `web_fetch`, `ask_user`, `list_notebook`, `write_note`, `question_bank`, `github`, `consult_subagent`, `workspace_list`, `workspace_read`, `workspace_search`, `workspace_present` и `workspace_export`, монтируются автоматически, когда ход имеет подходящий контекст.
+Переключаемые пользователем инструменты: `brainstorm`, `web_search`, `paper_search`, `reason` и `geogebra_analysis` — плюс `imagegen` и `videogen` после настройки соответствующей генеративной модели. Контекстные инструменты, такие как `rag`, `kb_files`, `knowledge_frontier`, `read_source`, `read_memory`, `write_memory`, `read_skill`, `load_tools`, `exec`, `web_fetch`, `ask_user`, `list_notebook`, `write_note`, `question_bank`, `github`, `consult_subagent`, `workspace_list`, `workspace_read`, `workspace_search`, `workspace_present` и `workspace_export`, монтируются автоматически, когда ход имеет подходящий контекст.
 
 Контекст бывает двух видов: **постоянный контекст сессии** (возможность, рабочее пространство или курс, инструменты, базы знаний, персонаж, модель и состояние Reading / Mastery) сохраняется между ходами; **одноразовые ссылки** (файлы, история чата, книги, разделы чтения, блокноты, банк вопросов, импортированные агенты) берутся из меню `+` для одного хода. Кнопка голосового ввода только транскрибирует текущее сообщение.
 
@@ -633,6 +635,7 @@ data/
 deeptutor chat                                              # интерактивный REPL
 deeptutor chat --capability deep_solve --kb my-kb --tool rag
 deeptutor run chat "Explain the Fourier transform" --tool rag --kb textbook
+deeptutor run chat "Find recent work beyond this material" --kb textbook --tool knowledge_frontier
 deeptutor run deep_research "Survey 2026 papers on RAG" \
   --config mode=report --config depth=standard
 ```

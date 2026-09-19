@@ -390,6 +390,8 @@ deeptutor config show
 <img src="../../assets/figs/web-1.6.5/OVERVIEW.png" alt="الصفحة الرئيسية لـ DeepTutor — مساحة عمل Chat مع كل الأسطح في الشريط الجانبي" width="900">
 </div>
 
+> **حالة لقطات الشاشة:** الصورة العامة محدثة لـ v1.6.5. لقطات الواجهات أدناه لا تزال مراجع من v1.4.6 أثناء تحديثها؛ راجع [جرد لقطات الشاشة](../../UI_SCREENSHOT_REFRESH.md). استخدمها لفهم سير العمل، لا كملاحة دقيقة للواجهة الحالية.
+
 <details>
 <summary><b>🏗️ معمارية النظام</b></summary>
 
@@ -414,7 +416,7 @@ Chat هي القدرة الافتراضية والمكان الذي يبدأ ف�
 <img src="../../assets/figs/system/chat-agent-loop.png" alt="حلقة وكيل محادثة DeepTutor" width="900">
 </div>
 
-الأدوات القابلة للتبديل من قِبَل المستخدم هي `brainstorm` و`web_search` و`paper_search` و`reason` و`geogebra_analysis` — بالإضافة إلى `imagegen` و`videogen` بمجرد تهيئة نموذج التوليد المطابق. الأدوات السياقية مثل `rag` و`kb_files` و`read_source` و`read_memory` و`write_memory` و`read_skill` و`load_tools` و`exec` و`web_fetch` و`ask_user` و`list_notebook` و`write_note` و`question_bank` و`github` و`consult_subagent` و`workspace_list` و`workspace_read` و`workspace_search` و`workspace_present` و`workspace_export` تُثبَّت تلقائياً عندما يكون للدور السياق الصحيح.
+الأدوات القابلة للتبديل من قِبَل المستخدم هي `brainstorm` و`web_search` و`paper_search` و`reason` و`geogebra_analysis` — بالإضافة إلى `imagegen` و`videogen` بمجرد تهيئة نموذج التوليد المطابق. الأدوات السياقية مثل `rag` و`kb_files` و`knowledge_frontier` و`read_source` و`read_memory` و`write_memory` و`read_skill` و`load_tools` و`exec` و`web_fetch` و`ask_user` و`list_notebook` و`write_note` و`question_bank` و`github` و`consult_subagent` و`workspace_list` و`workspace_read` و`workspace_search` و`workspace_present` و`workspace_export` تُثبَّت تلقائياً عندما يكون للدور السياق الصحيح.
 
 يأتي السياق في نوعين: يستمر **السياق الثابت للجلسة** (القدرة، ومساحة العمل أو الدورة، والأدوات، وقواعد المعرفة، والشخصية، والنموذج، وحالة Reading / Mastery) عبر الأدوار؛ وتأتي **المراجع لمرة واحدة** (الملفات وتاريخ المحادثة والكتب وأقسام القراءة ودفاتر الملاحظات وبنك الأسئلة والوكلاء المستوردون) من قائمة `+` لدور واحد. ولا يفعل زر الصوت سوى تفريغ الرسالة الحالية نصياً.
 
@@ -633,6 +635,7 @@ data/
 deeptutor chat                                              # interactive REPL
 deeptutor chat --capability deep_solve --kb my-kb --tool rag
 deeptutor run chat "Explain the Fourier transform" --tool rag --kb textbook
+deeptutor run chat "Find recent work beyond this material" --kb textbook --tool knowledge_frontier
 deeptutor run deep_research "Survey 2026 papers on RAG" \
   --config mode=report --config depth=standard
 ```

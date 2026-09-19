@@ -390,6 +390,8 @@ DeepTutor अपने installed code, private runtime home, और optional Con
 <img src="../../assets/figs/web-1.6.5/OVERVIEW.png" alt="DeepTutor होम — sidebar में हर surface के साथ Chat workspace" width="900">
 </div>
 
+> **Screenshot स्थिति:** overview v1.6.5 के लिए current है। नीचे दी गई surface screenshots अभी v1.4.6 references हैं और versioned refresh जारी है; [screenshot inventory](../../UI_SCREENSHOT_REFRESH.md) देखें। इन्हें workflows समझने के लिए उपयोग करें, current exact navigation के रूप में नहीं।
+
 <details>
 <summary><b>🏗️ System architecture</b></summary>
 
@@ -414,7 +416,7 @@ Loop जानबूझकर simple है: model rounds में सोचत
 <img src="../../assets/figs/system/chat-agent-loop.png" alt="DeepTutor Chat agent loop" width="900">
 </div>
 
-User-toggleable tools हैं `brainstorm`, `web_search`, `paper_search`, `reason`, और `geogebra_analysis` — साथ ही `imagegen` और `videogen` जब आप matching generation model configure करें। Contextual tools जैसे `rag`, `kb_files`, `read_source`, `read_memory`, `write_memory`, `read_skill`, `load_tools`, `exec`, `web_fetch`, `ask_user`, `list_notebook`, `write_note`, `question_bank`, `github`, `consult_subagent`, `workspace_list`, `workspace_read`, `workspace_search`, `workspace_present`, और `workspace_export` तब automatically mount होते हैं जब turn के पास सही context हो।
+User-toggleable tools हैं `brainstorm`, `web_search`, `paper_search`, `reason`, और `geogebra_analysis` — साथ ही `imagegen` और `videogen` जब आप matching generation model configure करें। Contextual tools जैसे `rag`, `kb_files`, `knowledge_frontier`, `read_source`, `read_memory`, `write_memory`, `read_skill`, `load_tools`, `exec`, `web_fetch`, `ask_user`, `list_notebook`, `write_note`, `question_bank`, `github`, `consult_subagent`, `workspace_list`, `workspace_read`, `workspace_search`, `workspace_present`, और `workspace_export` तब automatically mount होते हैं जब turn के पास सही context हो।
 
 Context दो प्रकार की होती है: **sticky session context** (capability, workspace या course, tools, knowledge bases, persona, model, और Reading / Mastery state) turns के पार persist करती है; **एक-बार references** (files, chat history, books, reading sections, notebooks, question bank, imported agents) एक single turn के लिए `+` menu से आते हैं। Voice button केवल current message को transcribe करता है।
 
@@ -633,6 +635,7 @@ data/
 deeptutor chat                                              # interactive REPL
 deeptutor chat --capability deep_solve --kb my-kb --tool rag
 deeptutor run chat "Explain the Fourier transform" --tool rag --kb textbook
+deeptutor run chat "Find recent work beyond this material" --kb textbook --tool knowledge_frontier
 deeptutor run deep_research "Survey 2026 papers on RAG" \
   --config mode=report --config depth=standard
 ```

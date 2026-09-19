@@ -50,6 +50,7 @@ BUILTIN_TOOL_SPECS: tuple[BuiltinToolSpec, ...] = (
             ("brainstorm", "BrainstormTool"),
             ("rag", "RAGTool"),
             ("kb_files", "KbFilesTool"),
+            ("knowledge_frontier", "KnowledgeFrontierTool"),
             ("web_search", "WebSearchTool"),
             ("reason", "ReasonTool"),
             ("paper_search", "PaperSearchToolWrapper"),
@@ -210,6 +211,7 @@ BUILTIN_TOOL_SPEC_BY_NAME: dict[str, BuiltinToolSpec] = {
 }
 
 TOOL_ALIASES: dict[str, tuple[str, dict[str, object]]] = {
+    "pdf": ("read_source", {}),
     "rag_hybrid": ("rag", {"mode": "hybrid"}),
     "rag_naive": ("rag", {"mode": "naive"}),
     "rag_search": ("rag", {}),

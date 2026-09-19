@@ -407,6 +407,8 @@ DeepTutor แยกโค้ดที่ติดตั้ง, runtime home ส�
 <img src="../../assets/figs/web-1.6.5/OVERVIEW.png" alt="หน้าแรก DeepTutor — workspace Chat พร้อมทุกส่วนในแถบด้านข้าง" width="900">
 </div>
 
+> **สถานะภาพหน้าจอ:** ภาพภาพรวมเป็นเวอร์ชัน v1.6.5 ส่วนภาพหน้าจอรายการด้านล่างยังเป็นข้อมูลอ้างอิง v1.4.6 ระหว่างการอัปเดต ดู [รายการภาพหน้าจอ](../../UI_SCREENSHOT_REFRESH.md) ใช้เพื่อทำความเข้าใจขั้นตอนการใช้งาน ไม่ใช่การนำทางปัจจุบันแบบเป๊ะ
+
 <details>
 <summary><b>🏗️ สถาปัตยกรรมระบบ</b></summary>
 
@@ -431,7 +433,7 @@ Chat คือความสามารถเริ่มต้นและส
 <img src="../../assets/figs/system/chat-agent-loop.png" alt="ลูป agent ของ Chat ใน DeepTutor" width="900">
 </div>
 
-เครื่องมือที่ผู้ใช้สลับได้ ได้แก่ `brainstorm`, `web_search`, `paper_search`, `reason`, และ `geogebra_analysis` — รวมถึง `imagegen` และ `videogen` เมื่อคุณกำหนดค่าโมเดลสร้างที่ตรงกัน เครื่องมือตามบริบทเช่น `rag`, `kb_files`, `read_source`, `read_memory`, `write_memory`, `read_skill`, `load_tools`, `exec`, `web_fetch`, `ask_user`, `list_notebook`, `write_note`, `question_bank`, `github`, `consult_subagent`, `workspace_list`, `workspace_read`, `workspace_search`, `workspace_present` และ `workspace_export` จะ mount อัตโนมัติเมื่อ turn มีบริบทที่ถูกต้อง
+เครื่องมือที่ผู้ใช้สลับได้ ได้แก่ `brainstorm`, `web_search`, `paper_search`, `reason`, และ `geogebra_analysis` — รวมถึง `imagegen` และ `videogen` เมื่อคุณกำหนดค่าโมเดลสร้างที่ตรงกัน เครื่องมือตามบริบทเช่น `rag`, `kb_files`, `knowledge_frontier`, `read_source`, `read_memory`, `write_memory`, `read_skill`, `load_tools`, `exec`, `web_fetch`, `ask_user`, `list_notebook`, `write_note`, `question_bank`, `github`, `consult_subagent`, `workspace_list`, `workspace_read`, `workspace_search`, `workspace_present` และ `workspace_export` จะ mount อัตโนมัติเมื่อ turn มีบริบทที่ถูกต้อง
 
 บริบทมีสองประเภท: **sticky session context** (capability, workspace หรือ course, tools, knowledge bases, persona, model และสถานะ Reading / Mastery) คงอยู่ตลอด turns; **one-time references** (ไฟล์, ประวัติ chat, หนังสือ, ส่วนการอ่าน, notebooks, question bank, imported agents) มาจากเมนู `+` สำหรับ turn เดียว ปุ่ม voice ทำหน้าที่ถอดเสียงเฉพาะข้อความปัจจุบัน
 
@@ -650,6 +652,7 @@ binary `deeptutor` เดียว, สองวิธีเข้า: **REPL** 
 deeptutor chat                                              # interactive REPL
 deeptutor chat --capability deep_solve --kb my-kb --tool rag
 deeptutor run chat "Explain the Fourier transform" --tool rag --kb textbook
+deeptutor run chat "Find recent work beyond this material" --kb textbook --tool knowledge_frontier
 deeptutor run deep_research "Survey 2026 papers on RAG" \
   --config mode=report --config depth=standard
 ```

@@ -390,6 +390,8 @@ DeepTutor 将已安装的代码、私有运行时主目录与可选的内容工�
 <img src="../../assets/figs/web-1.6.5/OVERVIEW.png" alt="DeepTutor 主页 — 带有侧边栏所有入口的 Chat 工作区" width="900">
 </div>
 
+> **截图状态：** 总览图已更新到 v1.6.5。下方功能截图仍是 v1.4.6 参考图，正在分批替换；请查看[截图清单](../../UI_SCREENSHOT_REFRESH.md)。它们适合说明工作流，不代表当前精确导航。
+
 <details>
 <summary><b>🏗️ 系统架构</b></summary>
 
@@ -414,7 +416,7 @@ Chat 是默认能力，也是大多数工作的起点。单个对话线程可以
 <img src="../../assets/figs/system/chat-agent-loop.png" alt="DeepTutor 聊天智能体循环" width="900">
 </div>
 
-用户可切换的工具有 `brainstorm`、`web_search`、`paper_search`、`reason` 和 `geogebra_analysis` — 配置了对应生成模型后还有 `imagegen` 和 `videogen`。上下文工具如 `rag`、`kb_files`、`read_source`、`read_memory`、`write_memory`、`read_skill`、`load_tools`、`exec`、`web_fetch`、`ask_user`、`list_notebook`、`write_note`、`question_bank`、`github`、`consult_subagent`、`workspace_list`、`workspace_read`、`workspace_search`、`workspace_present` 和 `workspace_export` 会在当前轮次具备相应上下文时自动挂载。
+用户可切换的工具有 `brainstorm`、`web_search`、`paper_search`、`reason` 和 `geogebra_analysis` — 配置了对应生成模型后还有 `imagegen` 和 `videogen`。上下文工具如 `rag`、`kb_files`、`knowledge_frontier`、`read_source`、`read_memory`、`write_memory`、`read_skill`、`load_tools`、`exec`、`web_fetch`、`ask_user`、`list_notebook`、`write_note`、`question_bank`、`github`、`consult_subagent`、`workspace_list`、`workspace_read`、`workspace_search`、`workspace_present` 和 `workspace_export` 会在当前轮次具备相应上下文时自动挂载。
 
 上下文分为两类：**粘性会话上下文**（能力、工作区或课程、工具、知识库、人格预设、模型，以及 Reading / Mastery 状态）会在各轮次间持续保留；**一次性引用**（文件、聊天历史、书籍、阅读章节、笔记本、题库、导入的智能体）通过 `+` 菜单添加，仅用于单次对话轮次。语音按钮只会转录当前消息。
 
@@ -633,6 +635,7 @@ data/
 deeptutor chat                                              # interactive REPL
 deeptutor chat --capability deep_solve --kb my-kb --tool rag
 deeptutor run chat "Explain the Fourier transform" --tool rag --kb textbook
+deeptutor run chat "Find recent work beyond this material" --kb textbook --tool knowledge_frontier
 deeptutor run deep_research "Survey 2026 papers on RAG" \
   --config mode=report --config depth=standard
 ```

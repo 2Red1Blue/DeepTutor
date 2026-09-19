@@ -399,6 +399,8 @@ Si una respuesta pierde una restricción anterior, cita evidencia débil o contr
 <img src="../../assets/figs/web-1.6.5/OVERVIEW.png" alt="Inicio de DeepTutor — el espacio de trabajo Chat con todas las superficies en la barra lateral" width="900">
 </div>
 
+> **Estado de las capturas:** la vista general está actualizada para v1.6.5. Las capturas de superficies siguientes siguen siendo referencias de v1.4.6 mientras se realiza la actualización; consulta el [inventario de capturas](../../UI_SCREENSHOT_REFRESH.md). Úsalas para entender los flujos, no como navegación exacta actual.
+
 <details>
 <summary><b>🏗️ Arquitectura del sistema</b></summary>
 
@@ -423,7 +425,7 @@ El bucle es deliberadamente simple: el modelo piensa en rondas, llama herramient
 <img src="../../assets/figs/system/chat-agent-loop.png" alt="Bucle de agente de chat DeepTutor" width="900">
 </div>
 
-Las herramientas activables por el usuario son `brainstorm`, `web_search`, `paper_search`, `reason` y `geogebra_analysis` — más `imagegen` y `videogen` una vez que configures el modelo de generación correspondiente. Las herramientas contextuales como `rag`, `kb_files`, `read_source`, `read_memory`, `write_memory`, `read_skill`, `load_tools`, `exec`, `web_fetch`, `ask_user`, `list_notebook`, `write_note`, `question_bank`, `github`, `consult_subagent`, `workspace_list`, `workspace_read`, `workspace_search`, `workspace_present` y `workspace_export` se montan automáticamente cuando el turno tiene el contexto adecuado.
+Las herramientas activables por el usuario son `brainstorm`, `web_search`, `paper_search`, `reason` y `geogebra_analysis` — más `imagegen` y `videogen` una vez que configures el modelo de generación correspondiente. Las herramientas contextuales como `rag`, `kb_files`, `knowledge_frontier`, `read_source`, `read_memory`, `write_memory`, `read_skill`, `load_tools`, `exec`, `web_fetch`, `ask_user`, `list_notebook`, `write_note`, `question_bank`, `github`, `consult_subagent`, `workspace_list`, `workspace_read`, `workspace_search`, `workspace_present` y `workspace_export` se montan automáticamente cuando el turno tiene el contexto adecuado.
 
 El contexto viene en dos tipos: el **contexto de sesión persistente** (capacidad, espacio de trabajo o curso, herramientas, bases de conocimiento, persona, modelo y estado de Reading / Mastery) persiste entre turnos; las **referencias de un solo uso** (archivos, historial de chat, libros, secciones de lectura, cuadernos, banco de preguntas, agentes importados) vienen del menú `+` para un único turno. El botón de voz solo transcribe el mensaje actual.
 
@@ -642,6 +644,7 @@ Un binario `deeptutor`, dos formas de entrar: un **REPL** interactivo para quien
 deeptutor chat                                              # REPL interactivo
 deeptutor chat --capability deep_solve --kb my-kb --tool rag
 deeptutor run chat "Explain the Fourier transform" --tool rag --kb textbook
+deeptutor run chat "Find recent work beyond this material" --kb textbook --tool knowledge_frontier
 deeptutor run deep_research "Survey 2026 papers on RAG" \
   --config mode=report --config depth=standard
 ```

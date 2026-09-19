@@ -210,6 +210,12 @@ class KbFilesTool(_PromptHintsMixin, BaseTool):
         )
 
 
+# How many of a skill's files a not-found message names before it truncates.
+# Enough to identify the right path in any skill shaped like the ones shipped;
+# short enough that a skill carrying a reference tree cannot flood the turn.
+_SKILL_FILE_LIST_LIMIT = 40
+
+
 def _kb_files_limit(raw: Any) -> int:
     """Clamp a model-supplied ``limit`` into range; fall back on anything unusable."""
     try:
@@ -219,6 +225,89 @@ def _kb_files_limit(raw: Any) -> int:
     if requested <= 0:
         return KB_FILES_DEFAULT_LIMIT
     return min(requested, KB_FILES_MAX_LIMIT)
+
+
+class KnowledgeFrontierTool(_PromptHintsMixin, BaseTool):
+    """Discover recent research that extends an attached knowledge base."""
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="knowledge_frontier",
+            description=(
+                "Summarize the themes and gaps in one attached knowledge base, "
+                "then search arXiv for recent work that may extend it. Use when "
+                "the learner asks for frontier papers, new research, or what to "
+                "study next; the tool recommends but never imports sources."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="kb_name",
+                    type="string",
+                    description="Knowledge base to inspect. Must be one of the attached knowledge bases.",
+                ),
+                ToolParameter(
+                    name="focus",
+                    type="string",
+                    description=(
+                        "Optional narrower research goal, method, or topic. "
+                        "Omit to cover the knowledge base broadly."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="max_papers",
+                    type="integer",
+                    description="Maximum recommendations to return (default 5, max 10).",
+                    required=False,
+                    default=5,
+                ),
+                ToolParameter(
+                    name="years_limit",
+                    type="integer",
+                    description="Only include preprints from the last N years (default 3, max 10).",
+                    required=False,
+                    default=3,
+                ),
+            ],
+        )
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        from deeptutor.multi_user.knowledge_access import resolve_kb_manifest
+        from deeptutor.tools.knowledge_frontier import discover_frontier
+
+        kb_name = str(kwargs.get("kb_name") or "").strip()
+        if not kb_name:
+            raise ValueError("knowledge_frontier requires an explicit kb_name.")
+
+        manifest = await asyncio.to_thread(resolve_kb_manifest, kb_name, limit=20)
+        if manifest is None:
+            raise ValueError(f"Knowledge base '{kb_name}' is not accessible.")
+
+        result = await discover_frontier(
+            kb_name=kb_name,
+            manifest=manifest,
+            focus=kwargs.get("focus", ""),
+            max_papers=kwargs.get("max_papers", 5),
+            years_limit=kwargs.get("years_limit", 3),
+            api_key=kwargs.get("api_key"),
+            base_url=kwargs.get("base_url"),
+            model=kwargs.get("model"),
+        )
+        paper_sources = [
+            {
+                "type": "paper",
+                "provider": "arxiv",
+                "url": paper.get("url", ""),
+                "title": paper.get("title", ""),
+                "arxiv_id": paper.get("arxiv_id", ""),
+            }
+            for paper in result["metadata"]["papers"]
+        ]
+        return ToolResult(
+            content=result["content"],
+            sources=[*result["kb_sources"], *paper_sources],
+            metadata=result["metadata"],
+        )
 
 
 class WebSearchTool(_PromptHintsMixin, BaseTool):
@@ -382,6 +471,11 @@ class PaperSearchToolWrapper(_PromptHintsMixin, BaseTool):
 class GeoGebraAnalysisTool(_PromptHintsMixin, BaseTool):
     """Analyze a math-problem image and generate GeoGebra visualization commands."""
 
+    # Ceiling on a single vision analysis call (see the timeout branch in
+    # ``execute``). Reasoning VL models legitimately take minutes on hard
+    # figures; this only guards against provider stalls.
+    _VISION_ANALYSIS_TIMEOUT_S = 240
+
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="geogebra_analysis",
@@ -437,9 +531,29 @@ class GeoGebraAnalysisTool(_PromptHintsMixin, BaseTool):
         )
 
         try:
-            result = await agent.process(
-                question_text=question,
-                image_base64=image_base64,
+            # Bound the vision call: reasoning models (e.g. Qwen3-VL-*-Thinking)
+            # can take minutes on hard figures, but an unbounded await would
+            # hang the whole turn if the provider stalls. 240s covers long
+            # thinking while still failing loudly instead of silently.
+            result = await asyncio.wait_for(
+                agent.process(
+                    question_text=question,
+                    image_base64=image_base64,
+                ),
+                timeout=self._VISION_ANALYSIS_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "geogebra analysis timed out after %ss",
+                self._VISION_ANALYSIS_TIMEOUT_S,
+            )
+            return ToolResult(
+                content=(
+                    f"Vision analysis timed out after {self._VISION_ANALYSIS_TIMEOUT_S}s "
+                    "(the multimodal model is slow or unresponsive). "
+                    "Tell the user to retry, or describe the figure in text."
+                ),
+                success=False,
             )
         except Exception as exc:
             logger.exception("GeoGebra analysis pipeline failed")
@@ -524,18 +638,21 @@ class ReadSourceTool(_PromptHintsMixin, BaseTool):
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        source_id = str(kwargs.get("source_id") or "").strip()
-        if not source_id:
-            return ToolResult(
-                content="Error: source_id is required.",
-                success=False,
-            )
         source_index = kwargs.get("source_index")
         if not isinstance(source_index, dict) or not source_index:
             return ToolResult(
                 content=("Error: no attached sources are available for this turn."),
                 success=False,
             )
+        source_id = str(kwargs.get("source_id") or "").strip()
+        if not source_id:
+            if len(source_index) == 1:
+                source_id = next(iter(source_index))
+            else:
+                return ToolResult(
+                    content="Error: source_id is required when multiple sources are available.",
+                    success=False,
+                )
         full_text = source_index.get(source_id)
         if not full_text:
             available = ", ".join(sorted(source_index.keys()))
@@ -1343,6 +1460,7 @@ class ReadSkillTool(_PromptHintsMixin, BaseTool):
         from deeptutor.services.skill.service import (
             InvalidSkillNameError,
             InvalidSkillPathError,
+            SkillFileNotFoundError,
             SkillNotFoundError,
             SkillService,
         )
@@ -1369,6 +1487,23 @@ class ReadSkillTool(_PromptHintsMixin, BaseTool):
         for service in services:
             try:
                 content = service.read_skill_file(name, rel_path)
+            except SkillFileNotFoundError:
+                # The skill resolved, so the name was right and only the path
+                # was wrong — naming its actual files is what ends the retry
+                # loop. A skill with a large references/ tree would otherwise
+                # spend the turn's context listing itself, so the list is
+                # bounded and says when it was cut.
+                available = service.list_skill_files(name)
+                shown = ", ".join(available[:_SKILL_FILE_LIST_LIMIT]) or "none"
+                if len(available) > _SKILL_FILE_LIST_LIMIT:
+                    shown += f", … ({len(available) - _SKILL_FILE_LIST_LIMIT} more)"
+                return ToolResult(
+                    content=(
+                        f"(file not found: {rel_path!r} does not exist in skill "
+                        f"{name!r}, which holds: {shown})"
+                    ),
+                    success=False,
+                )
             except SkillNotFoundError:
                 continue
             except (InvalidSkillNameError, InvalidSkillPathError) as exc:
@@ -1377,9 +1512,15 @@ class ReadSkillTool(_PromptHintsMixin, BaseTool):
                 content=content,
                 metadata={"skill": name, "file": rel_path, "char_count": len(content)},
             )
+        available_names: set[str] = set()
+        for service in services:
+            available_names.update(skill.name for skill in service.list_skills())
+        available_skills = ", ".join(sorted(available_names))
+        available_hint = f". Available skills: {available_skills}" if available_skills else ""
         return ToolResult(
             content=(
-                f"(skill not found: {name!r} — use a name exactly as listed in the Skills section)"
+                f"(skill not found: {name!r} — use a name exactly as listed in the "
+                f"Skills section{available_hint})"
             ),
             success=False,
         )
@@ -1588,6 +1729,7 @@ USER_TOGGLEABLE_TOOL_NAMES: tuple[str, ...] = (
 CONFIGURABLE_BUILTIN_TOOL_NAMES: tuple[str, ...] = (
     "rag",
     "kb_files",
+    "knowledge_frontier",
     "read_source",
     "read_memory",
     "write_memory",
@@ -1646,6 +1788,7 @@ __all__ = [
     "GithubTool",
     "KbFilesTool",
     "ImagegenTool",
+    "KnowledgeFrontierTool",
     "VideogenTool",
     "ListNotebookTool",
     "PaperSearchToolWrapper",

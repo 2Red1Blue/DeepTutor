@@ -1,9 +1,8 @@
 """Unit tests for the new QuestionPipeline primitives.
 
 These tests cover the pure helpers (plan parsing, payload normalization,
-issue collection) and the structured per-question emission. End-to-end
-flow (loop driving + LLM streaming) is exercised by integration tests
-that mock the LLM client; out of scope here.
+issue collection), structured per-question emission, and pipeline control
+flow with stubbed LLM calls and a real StreamBus.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -24,17 +23,26 @@ from deeptutor.agents.question.pipeline import (
     QuizPlan,
     QuizTemplate,
 )
+from deeptutor.runtime.agentic import LabeledStepResult
+from deeptutor.services.llm.config import LLMConfig
+from deeptutor.services.llm.reasoning_params import RETRY_REASONING_EFFORT
 
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _stub_llm_config(monkeypatch) -> None:
+    """Pipeline unit tests must not depend on a configured model catalog."""
+    monkeypatch.setattr(
+        "deeptutor.agents.question.pipeline.get_llm_config",
+        lambda: LLMConfig(model="test-model", api_key="test-key"),
+    )
+
+
 def _make_pipeline(language: str = "en") -> QuestionPipeline:
-    """Build a pipeline without hitting the network for LLM config."""
-    # Tests don't drive ``run`` — they only exercise pure helpers and the
-    # YAML-driven trace metadata builders. So the LLM config can be the
-    # production one (env-based) without making any actual API calls.
+    """Build a pipeline with the stubbed LLM configuration."""
     return QuestionPipeline(language=language)
 
 
@@ -90,6 +98,99 @@ class _StubStreamBus:
         self.error_events.append(
             {"message": message, "source": source, "stage": stage, "metadata": metadata or {}}
         )
+
+
+# ---------------------------------------------------------------------------
+# Plan completeness
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+@pytest.mark.parametrize(
+    ("raw", "valid_count"),
+    [
+        pytest.param("", 0, id="empty-response"),
+        pytest.param('{"templates": [', 0, id="truncated-json"),
+        pytest.param('{"templates": [{"topic": "Algebra"}]}', 1, id="partial-plan"),
+        pytest.param(
+            '{"templates": [{"topic": "Algebra"}, {"topic": "algebra"}]}',
+            1,
+            id="duplicate-topics",
+        ),
+        pytest.param(
+            '{"templates": [{"topic": "Algebra"}, {"topic": "Geometry"}]}',
+            2,
+            id="complete-plan",
+        ),
+    ],
+)
+def test_a_plan_with_no_templates_fails_and_a_short_one_proceeds(
+    monkeypatch, language: str, raw: str, valid_count: int
+) -> None:
+    """Two different outcomes, told apart by whether a quiz can exist at all.
+
+    No templates is not a small quiz, it is no quiz: phase 3 iterates the
+    templates, so an empty plan used to ship a zero-question result with no
+    error anywhere (#1318). Fewer templates than asked is a smaller quiz, and
+    three real questions beat a failure — that case warns and continues.
+    """
+    from deeptutor.core.context import UnifiedContext
+    from deeptutor.core.stream import StreamEventType
+    from deeptutor.runtime.stream_bus import StreamBus
+
+    pipeline = _make_pipeline(language)
+    bus = StreamBus()
+    context = UnifiedContext(user_message="quiz me", session_id="plan-test")
+    monkeypatch.setattr(
+        "deeptutor.agents.question.pipeline.build_openai_client", lambda config: object()
+    )
+    monkeypatch.setattr(pipeline, "_prepare_pageindex_tools", AsyncMock())
+    monkeypatch.setattr(pipeline, "_explore", AsyncMock(return_value=("", "exploration")))
+    monkeypatch.setattr(
+        pipeline,
+        "_run_labeled_step",
+        AsyncMock(return_value=LabeledStepResult(label="PLAN", text=raw)),
+    )
+
+    async def quiz_one(*, template: QuizTemplate, **kwargs: Any) -> QuizPair:
+        return QuizPair(
+            question_id=template.question_id,
+            question=template.topic,
+            question_type=template.question_type,
+            correct_answer="42",
+            explanation="A test answer.",
+        )
+
+    quiz = AsyncMock(side_effect=quiz_one)
+    monkeypatch.setattr(pipeline, "_quiz_one", quiz)
+
+    async def run():
+        kwargs = dict(context=context, user_message="quiz me", num_questions=2, stream=bus)
+        if valid_count == 0:
+            with pytest.raises(RuntimeError) as exc:
+                await pipeline.run(**kwargs)
+            assert ("retry" if language == "en" else "重试") in str(exc.value)
+        else:
+            payload = await pipeline.run(**kwargs)
+            assert payload["summary"]["success"] is True
+        await bus.close()
+        return [event async for event in bus.subscribe()]
+
+    events = asyncio.run(run())
+    if valid_count == 0:
+        quiz.assert_not_awaited()
+        assert any(event.type == StreamEventType.ERROR for event in events)
+        assert not any(event.type == StreamEventType.RESULT for event in events)
+    else:
+        assert quiz.await_count == valid_count
+        assert any(event.type == StreamEventType.RESULT for event in events)
+        # A short plan still says so, so nobody reads the smaller quiz as the
+        # one they asked for.
+        warned = any(
+            event.type == StreamEventType.CONTENT and str(valid_count) in (event.content or "")
+            for event in events
+        )
+        assert warned or valid_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -803,15 +904,16 @@ def test_runtime_config_overrides_max_iterations_and_summarizer_tokens() -> None
 def test_runtime_config_falls_back_to_defaults_when_missing() -> None:
     """A missing / empty ``exploring`` block must not crash __init__; the
     module-level defaults take over."""
-    from deeptutor.agents.question.pipeline import (
-        DEFAULT_MAX_EXPLORE_ITERATIONS,
-        DEFAULT_TOOL_SUMMARIZER_MAX_TOKENS,
-    )
+    from deeptutor.agents.question.pipeline import DEFAULT_MAX_EXPLORE_ITERATIONS
+    from deeptutor.services.config.loader import DEFAULT_QUESTION_PARAMS
 
     pipeline = QuestionPipeline(language="en", runtime_config={})
     assert pipeline.max_explore_iterations == DEFAULT_MAX_EXPLORE_ITERATIONS
     assert pipeline.tool_summarizer_enabled is True
-    assert pipeline.tool_summarizer_max_tokens == DEFAULT_TOOL_SUMMARIZER_MAX_TOKENS
+    assert (
+        pipeline.tool_summarizer_max_tokens
+        == DEFAULT_QUESTION_PARAMS["tool_summarizer"]["max_tokens"]
+    )
 
 
 def test_build_question_runtime_config_reads_capabilities_section() -> None:
@@ -1028,3 +1130,105 @@ def test_parse_quiz_payload_tolerates_trailing_brace_prose() -> None:
     assert parsed["question"] == "What is 2+2?"
     assert parsed["correct_answer"] == "4"
     assert parsed["explanation"] == "basic arithmetic"
+
+
+# ---------------------------------------------------------------------------
+# plan starvation (#1318)
+# ---------------------------------------------------------------------------
+
+
+async def _plan_with_steps(
+    steps: list[LabeledStepResult],
+) -> tuple[QuizPlan, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Drive ``_plan`` against scripted labeled-step outcomes.
+
+    Returns the plan, the bus's progress events, and the kwargs each
+    ``_run_labeled_step`` call was made with.
+    """
+    pipeline = _make_pipeline()
+    bus = _StubStreamBus()
+    calls: list[dict[str, Any]] = []
+    remaining = list(steps)
+
+    async def _fake_step(**kwargs: Any) -> LabeledStepResult:
+        calls.append(kwargs)
+        return remaining.pop(0)
+
+    with patch.object(QuestionPipeline, "_run_labeled_step", side_effect=_fake_step):
+        plan = await pipeline._plan(
+            user_message="quiz me on gradients",
+            exploration_trace="",
+            num_questions=2,
+            difficulty="medium",
+            allowed_types=[],
+            per_type_counts={},
+            stream=bus,
+            client=object(),
+        )
+    return plan, bus.progress_events, calls
+
+
+_PLAN_JSON = json.dumps(
+    {
+        "analysis": "two ideas",
+        "templates": [
+            {"question_id": "q1", "topic": "chain rule", "question_type": "short_answer"},
+            {"question_id": "q2", "topic": "gradients", "question_type": "short_answer"},
+        ],
+    }
+)
+
+
+def test_plan_starved_by_reasoning_is_asked_again_with_less_thinking() -> None:
+    """The reporter's quiz: round one is all scratchpad, so no quiz shipped.
+
+    ``text=""`` alone could not justify a retry — it is also what a model
+    with nothing to say returns — so the plan step degraded to zero templates
+    and phase 3, which iterates them, emitted no questions at all.
+    """
+    plan, progress, calls = asyncio.run(
+        _plan_with_steps(
+            [
+                LabeledStepResult(label="UNKNOWN", text="", reasoning_only=True),
+                LabeledStepResult(label="FINISH", text=_PLAN_JSON),
+            ]
+        )
+    )
+
+    assert [t.topic for t in plan.templates] == ["chain rule", "gradients"]
+    assert len(calls) == 2
+    assert calls[0].get("reasoning_effort") is None
+    assert calls[1]["reasoning_effort"] == RETRY_REASONING_EFFORT
+    assert any("reasoning" in event["message"].lower() for event in progress)
+
+
+def test_plan_that_answers_first_time_is_not_asked_twice() -> None:
+    """The retry costs a whole LLM round; a healthy plan must not pay it."""
+    plan, _progress, calls = asyncio.run(
+        _plan_with_steps([LabeledStepResult(label="FINISH", text=_PLAN_JSON)])
+    )
+
+    assert len(plan.templates) == 2
+    assert len(calls) == 1
+
+
+def test_plan_still_empty_after_the_retry_fails_instead_of_returning_nothing() -> None:
+    """Two starved rounds and no plan is the end of the road.
+
+    The retry exists so a starved planner gets a second pass; when that pass
+    is starved too there is no quiz to build, and returning an empty plan let
+    phase 3 iterate nothing and ship a zero-question result (#1318). This PR
+    settles the product question this test used to hold open: no templates
+    fails, and the retry is still spent before it does.
+    """
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(
+            _plan_with_steps(
+                [
+                    LabeledStepResult(label="UNKNOWN", text="", reasoning_only=True),
+                    LabeledStepResult(label="UNKNOWN", text="", reasoning_only=True),
+                ]
+            )
+        )
+
+    assert "retry" in str(exc.value).lower()

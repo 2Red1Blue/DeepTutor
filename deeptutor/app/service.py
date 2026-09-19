@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+import contextlib
 import time
 from typing import Any
 
 from deeptutor.runtime.coordination import RuntimeCoordinator
-from deeptutor.services.session.protocol import SessionStoreProtocol
+from deeptutor.services.session.protocol import ActiveTurnConflict, SessionStoreProtocol
 from deeptutor.services.session.turn_runtime import TurnRuntimeManager
 
 from .contracts import TurnRequest
@@ -37,7 +38,15 @@ class TurnApplicationService:
         )
         payload = request.to_payload()
         store, runtime = self._resolve()
-        session, turn = await runtime.start_turn(payload)
+        try:
+            session, turn = await runtime.start_turn(payload)
+        except ActiveTurnConflict:
+            # Retry once, and only after something was actually reclaimed, so a
+            # session busy with a live turn still gets its conflict.
+            session_id = str(payload.get("session_id") or "")
+            if not session_id or not await self._reclaim_unowned_active_turn(session_id):
+                raise
+            session, turn = await runtime.start_turn(payload)
         await store.update_session_preferences(
             session["id"],
             {
@@ -55,7 +64,12 @@ class TurnApplicationService:
         overrides: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         _store, runtime = self._resolve()
-        return await runtime.regenerate_last_turn(session_id, overrides=overrides)
+        try:
+            return await runtime.regenerate_last_turn(session_id, overrides=overrides)
+        except ActiveTurnConflict:
+            if not await self._reclaim_unowned_active_turn(session_id):
+                raise
+            return await runtime.regenerate_last_turn(session_id, overrides=overrides)
 
     # How long to keep reading after DONE before closing the stream.
     #
@@ -213,7 +227,12 @@ class TurnApplicationService:
         }:
             return False
         if await self.coordinator.get_lease(turn_id) is None:
-            return False
+            # Nobody owns it, so a queued cancel would never be read. Stopping
+            # a turn nothing is executing is what the learner asked for, and
+            # the row is what blocks the session — reap it here for the same
+            # reason ``submit_user_reply`` does, and report the stop as done
+            # rather than as a refusal the UI cannot act on.
+            return await self._reap_unowned_live_turn(turn_id)
         await self.coordinator.submit_command(turn_id, "cancel", {}, command_id=command_id)
         # A duplicate command ID means the mutation was already accepted. The
         # WebSocket adapter must acknowledge that retry as success so a client
@@ -229,6 +248,14 @@ class TurnApplicationService:
         command_id: str | None = None,
     ) -> bool:
         if await self.coordinator.get_lease(turn_id) is None:
+            # Nobody owns the turn: a queued command would never be read. If
+            # the durable row still says ``waiting_input`` it is a zombie —
+            # the worker that owned the waiter is gone, and without this the
+            # session is blocked forever while the card sits on screen
+            # (#1297). Reap it synchronously (the background recovery pass
+            # would only sweep it on its next tick) so the client's ack
+            # rejection comes with a terminal state to recover from.
+            await self._reap_unowned_live_turn(turn_id)
             return False
         await self.coordinator.submit_command(
             turn_id,
@@ -236,6 +263,119 @@ class TurnApplicationService:
             {"text": text or "", "answers": answers},
             command_id=command_id,
         )
+        return True
+
+    async def _reclaim_unowned_active_turn(self, session_id: str) -> bool:
+        """Clear the rows blocking this session that nothing is executing.
+
+        ``_begin_turn_sync`` refuses a new turn while the session owns any row
+        in ``queued``/``running``/``waiting_input``. That is right while a turn
+        is alive and catastrophic once one is not: a single row left behind by
+        a lost worker or a restart blocks *every* later message, with no way
+        out from the UI (#1297, #1359). Users reported exactly that — one
+        window, no refresh, and a conversation that never accepts another word.
+
+        Liveness is the lease, never the row's age: a turn parked on an
+        ``ask_user`` card emits no events, so ``updated_at`` stops advancing
+        while it legitimately waits for a person to type. A sweep on age would
+        cancel that reader mid-answer. A live worker renews its lease every few
+        seconds whether or not it is producing output, so "no lease" is the one
+        signal that separates a zombie from a slow human.
+
+        Doing it here rather than on a timer is what makes it safe: the only
+        rows ever considered are ones already blocking a real request, so
+        there is no window in which a just-inserted turn can be swept before
+        its first renewal — the hazard that kept the periodic version out.
+
+        Returns ``True`` when something was reaped and the caller should retry.
+        """
+        store, _runtime = self._resolve()
+        try:
+            active = await store.list_active_turns(session_id)
+        except Exception:
+            return False
+        reclaimed = False
+        for row in active:
+            turn_id = str(row.get("id") or row.get("turn_id") or "")
+            if not turn_id:
+                continue
+            if await self.coordinator.get_lease(turn_id) is not None:
+                # Something is genuinely executing it. The conflict is real and
+                # the caller should see it.
+                continue
+            if await self._reap_unowned_live_turn(turn_id):
+                reclaimed = True
+        return reclaimed
+
+    async def _reap_unowned_live_turn(self, turn_id: str) -> bool:
+        """Fail a persisted live turn that has no live lease.
+
+        ``queued``, ``running`` and ``waiting_input`` are all rows
+        ``_begin_turn_sync`` counts as active, so any of them left behind by a
+        lost worker blocks the whole session, not just the card on screen.
+
+        Mirrors :class:`TurnRecoveryService`'s terminal write (CAS on status
+        with the fencing token, ``worker_lost`` failure code, error+done
+        events) so whatever raced us wins cleanly and subscribed clients
+        stop deterministically. Returns ``True`` when a zombie was reaped.
+        """
+        store, _runtime = self._resolve()
+        try:
+            turn = await store.get_turn(turn_id)
+        except Exception:
+            return False
+        if turn is None or str(turn.get("status") or "") not in {
+            "queued",
+            "running",
+            "waiting_input",
+        }:
+            return False
+        error = "The worker executing this turn was lost; resend your answer as a new message"
+        metadata = {
+            "turn_terminal": True,
+            "status": "failed",
+            "error_code": "worker_lost",
+            "retryable": True,
+        }
+        reap_event: dict[str, Any] = {
+            "type": "error",
+            "source": "turn_recovery",
+            "stage": "recovery",
+            "content": error,
+            "metadata": metadata,
+            "session_id": turn.get("session_id", ""),
+        }
+        done_event: dict[str, Any] = {
+            "type": "done",
+            "source": "turn_recovery",
+            "stage": "recovery",
+            "content": "",
+            "metadata": {"status": "failed", "error_code": "worker_lost", "retryable": True},
+            "session_id": turn.get("session_id", ""),
+        }
+        try:
+            transitioned = await store.transition_turn(
+                turn_id,
+                "failed",
+                expected_status=str(turn["status"]),
+                fencing_token=int(turn.get("fencing_token") or 0),
+                error=error,
+                failure_code="worker_lost",
+                retryable=True,
+            )
+            if not transitioned:
+                # A recovery pass or a late executor write beat us to it.
+                return False
+            await store.append_events(
+                turn_id,
+                [reap_event, done_event],
+                fencing_token=int(turn.get("fencing_token") or 0),
+            )
+        except Exception:
+            return False
+        for event in (reap_event, done_event):
+            with contextlib.suppress(Exception):
+                await self.coordinator.publish_event(turn_id, event)
         return True
 
     async def submit_user_input(
