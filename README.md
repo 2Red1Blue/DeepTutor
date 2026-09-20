@@ -216,7 +216,7 @@
 
 ### 📰 News
 
-- **2026-09-20** 🎉 40k stars in under 9 months! Thank you for your support — we'll keep expanding DeepTutor's learning ecosystem.
+- **2026-09-20** 🎉 40k stars in 9 months! We'll keep expanding DeepTutor's learning ecosystem.
 - **2026-05-22** 🌐 Official docs site live at [**deeptutor.info**](https://deeptutor.info/) — guides, references, and capability tours in one place.
 - **2026-04-19** 🎉 20k stars in 111 days! Thank you for the support toward truly personalized, intelligent tutoring.
 - **2026-04-10** 📄 Our paper is live on arXiv — read the [preprint](https://arxiv.org/abs/2604.26962) for the design and ideas behind DeepTutor.
