@@ -26,12 +26,14 @@ from deeptutor.api.routers.auth import require_admin
 from deeptutor.knowledge.kb_types import SUBAGENT_KB_TYPE
 from deeptutor.multi_user.knowledge_access import current_kb_manager
 from deeptutor.multi_user.partner_access import assert_partner_allowed, visible_partner_cards
-from deeptutor.services.rag.linked_kb import assert_path_allowed
 from deeptutor.services.subagent import (
     PARTNER_BACKEND_KIND,
+    SubagentResolutionError,
     detect_all,
-    list_backend_kinds,
+    executable_backend_kinds,
     load_subagent_settings,
+    native_execution_provenance,
+    resolve_backend_execution,
     save_subagent_settings,
     settings_from_dict,
 )
@@ -59,10 +61,14 @@ class SubagentMessageRequest(BaseModel):
     message: str
 
 
+def _raise_resolution_error(exc: SubagentResolutionError) -> None:
+    raise HTTPException(status_code=403 if exc.forbidden else 400, detail=exc.detail) from exc
+
+
 @router.get("/detect")
 async def detect_subagents():
     """Report which local and remote agent backends are usable."""
-    detections = await detect_all()
+    detections = await detect_all(allowed_kinds=executable_backend_kinds())
     return {"backends": [d.to_dict() for d in detections]}
 
 
@@ -71,7 +77,7 @@ async def backend_options():
     """Synced model + reasoning-effort options per backend (settings page sync)."""
     from deeptutor.services.subagent.models import list_backend_options
 
-    options = await list_backend_options()
+    options = await list_backend_options(allowed_kinds=executable_backend_kinds())
     return {"backends": [o.to_dict() for o in options]}
 
 
@@ -82,11 +88,13 @@ async def sync_backend(kind: str):
     For Claude Code this scrapes its ``/model`` TUI live and caches the result;
     for Codex it re-reads the CLI-maintained cache.
     """
-    from deeptutor.services.subagent import get_backend
     from deeptutor.services.subagent.models import sync_backend_options
 
-    backend = get_backend(kind)
-    if backend is None or not getattr(backend, "local_cli", True):
+    try:
+        resolved = resolve_backend_execution(kind, require_workspace=False)
+    except SubagentResolutionError as exc:
+        _raise_resolution_error(exc)
+    if not resolved.backend.local_cli:
         # Only local CLIs have a model catalog to sync; partners run their own.
         raise HTTPException(status_code=400, detail=f"Unknown agent kind: {kind!r}")
     options = await sync_backend_options(kind)
@@ -123,6 +131,8 @@ async def list_connections():
                 "description": meta.get("description", ""),
                 "created_at": meta.get("created_at"),
                 "updated_at": meta.get("updated_at"),
+                "execution_profile": "native",
+                "provenance": native_execution_provenance(str(meta.get("agent_kind") or "")),
             }
         )
     return {"connections": connections}
@@ -141,9 +151,6 @@ async def create_connection(payload: ConnectSubagentRequest):
     agent_kind = (payload.agent_kind or "").strip()
     if not name or not agent_kind:
         raise HTTPException(status_code=400, detail="Both name and agent_kind are required.")
-    if agent_kind not in list_backend_kinds():
-        raise HTTPException(status_code=400, detail=f"Unknown agent kind: {agent_kind!r}")
-
     resolved_cwd = ""
     partner_id = ""
     if agent_kind == PARTNER_BACKEND_KIND:
@@ -162,15 +169,11 @@ async def create_connection(payload: ConnectSubagentRequest):
         if not get_partner_manager().partner_exists(partner_id):
             raise HTTPException(status_code=400, detail=f"No partner named {partner_id!r}.")
     else:
-        from deeptutor.services.subagent import get_backend
-
-        backend = get_backend(agent_kind)
-        raw_cwd = (payload.cwd or "").strip()
-        if raw_cwd and backend is not None and getattr(backend, "local_cli", True):
-            try:
-                resolved_cwd = str(assert_path_allowed(raw_cwd))
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            resolved = resolve_backend_execution(agent_kind, cwd=payload.cwd)
+        except SubagentResolutionError as exc:
+            _raise_resolution_error(exc)
+        resolved_cwd = resolved.cwd
 
     try:
         manager = current_kb_manager()
@@ -189,6 +192,8 @@ async def create_connection(payload: ConnectSubagentRequest):
         "agent_kind": entry["agent_kind"],
         "cwd": entry["cwd"],
         "partner_id": entry.get("partner_id", ""),
+        "execution_profile": "native",
+        "provenance": native_execution_provenance(str(entry["agent_kind"])),
     }
 
 
@@ -234,17 +239,19 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
     if not isinstance(meta, dict) or meta.get("type") != SUBAGENT_KB_TYPE:
         raise HTTPException(status_code=404, detail=f"No connected subagent named {name!r}.")
 
-    from deeptutor.services.subagent import get_backend
     from deeptutor.services.subagent.sessions import get_session, remember_session, session_key
 
     kind = str(meta.get("agent_kind") or "")
     cwd = str(meta.get("cwd") or "")
     partner_id = str(meta.get("partner_id") or "")
-    backend = get_backend(kind)
-    if backend is None:
-        raise HTTPException(status_code=400, detail=f"Unknown agent kind: {kind!r}")
-
-    config = load_subagent_settings().backend(kind)
+    try:
+        resolved = resolve_backend_execution(kind, cwd=cwd)
+    except SubagentResolutionError as exc:
+        _raise_resolution_error(exc)
+    backend = resolved.backend
+    config = resolved.config
+    cwd = resolved.cwd
+    provenance = resolved.provenance
     skey = session_key(payload.chat_session_id, name) if payload.chat_session_id else ""
     resume_id = get_session(skey) if skey else None
 
@@ -271,12 +278,24 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
 
         task = asyncio.create_task(run())
         # The user's own message heads the exchange.
-        yield _ndjson({"channel": "user_question", "text": message})
+        yield _ndjson(
+            {
+                "channel": "user_question",
+                "text": message,
+                "execution_profile": "native",
+                "provenance": provenance,
+            }
+        )
         try:
             while True:
                 kind_, item = await queue.get()
                 if kind_ == "event":
-                    line = {"channel": item.kind, "text": item.text}
+                    line = {
+                        "channel": item.kind,
+                        "text": item.text,
+                        "execution_profile": "native",
+                        "provenance": provenance,
+                    }
                     merge_id = (item.meta or {}).get("merge_id")
                     if merge_id:
                         # Namespace away from the chat turn's consult merge ids.
@@ -286,12 +305,32 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
                     if skey and item.session_id:
                         remember_session(skey, item.session_id, kind=kind, cwd=cwd)
                     yield _ndjson(
-                        {"done": True, "success": item.success, "session_id": item.session_id or ""}
+                        {
+                            "done": True,
+                            "success": item.success,
+                            "session_id": item.session_id or "",
+                            "execution_profile": "native",
+                            "provenance": provenance,
+                        }
                     )
                     break
                 else:  # fail
-                    yield _ndjson({"channel": "error", "text": item})
-                    yield _ndjson({"done": True, "success": False})
+                    yield _ndjson(
+                        {
+                            "channel": "error",
+                            "text": item,
+                            "execution_profile": "native",
+                            "provenance": provenance,
+                        }
+                    )
+                    yield _ndjson(
+                        {
+                            "done": True,
+                            "success": False,
+                            "execution_profile": "native",
+                            "provenance": provenance,
+                        }
+                    )
                     break
         finally:
             if not task.done():

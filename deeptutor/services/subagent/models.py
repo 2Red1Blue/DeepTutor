@@ -390,9 +390,14 @@ _PROVIDERS: dict[str, Callable[..., Awaitable[BackendOptions]]] = {
 }
 
 
-async def list_backend_options() -> list[BackendOptions]:
-    """Synced model/effort options for every backend (the /settings sync source)."""
-    results = await asyncio.gather(*(provider() for provider in _PROVIDERS.values()))
+async def list_backend_options(*, allowed_kinds: set[str] | None = None) -> list[BackendOptions]:
+    """Synced model/effort options for allowed backends."""
+    providers = [
+        provider
+        for kind, provider in _PROVIDERS.items()
+        if allowed_kinds is None or kind in allowed_kinds
+    ]
+    results = await asyncio.gather(*(provider() for provider in providers))
     return list(results)
 
 

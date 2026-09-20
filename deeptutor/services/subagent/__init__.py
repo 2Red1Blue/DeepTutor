@@ -13,6 +13,14 @@ through the consult tool and the API.
 
 from __future__ import annotations
 
+from deeptutor.services.subagent.access import (
+    ResolvedSubagent,
+    SubagentResolutionError,
+    backend_available_to_current_user,
+    executable_backend_kinds,
+    native_execution_provenance,
+    resolve_backend_execution,
+)
 from deeptutor.services.subagent.base import OnEvent, SubagentBackend
 from deeptutor.services.subagent.config import (
     CONSULT_BUDGET_MAX,
@@ -37,6 +45,8 @@ from deeptutor.services.subagent.types import (
 __all__ = [
     "OnEvent",
     "SubagentBackend",
+    "ResolvedSubagent",
+    "SubagentResolutionError",
     "BackendConfig",
     "SubagentSettings",
     "DEFAULT_CONSULT_BUDGET",
@@ -50,6 +60,10 @@ __all__ = [
     "detect_all",
     "get_backend",
     "list_backend_kinds",
+    "backend_available_to_current_user",
+    "executable_backend_kinds",
+    "native_execution_provenance",
+    "resolve_backend_execution",
     "ConsultResult",
     "DetectResult",
     "SubagentEvent",

@@ -30,6 +30,7 @@ function emptyGrant(userId: string): GrantPayload {
     partners: [],
     enabled_tools: null,
     mcp_tools: null,
+    subagent_backends: null,
     exec_enabled: null,
     learning_policy: null,
   };
@@ -304,7 +305,7 @@ export function GrantEditor({
   }
 
   function setToolList(
-    key: "enabled_tools" | "mcp_tools",
+    key: "enabled_tools" | "mcp_tools" | "subagent_backends",
     value: string[] | null,
   ) {
     setGrant((current) => ({ ...current, [key]: value }));
@@ -372,7 +373,10 @@ export function GrantEditor({
 
   // Named apart from the imported `toggleName` helper it wraps, and narrowed to
   // the one key that still uses it: MCP rows go through McpToolGroups now.
-  function toggleGrantTool(key: "enabled_tools", name: string) {
+  function toggleGrantTool(
+    key: "enabled_tools" | "subagent_backends",
+    name: string,
+  ) {
     setGrant((current) => {
       const list = current[key];
       if (list === null) return current;
@@ -422,6 +426,7 @@ export function GrantEditor({
   // the admin switches to Custom and picks specific tool names.
   const mcpSummary =
     grant.mcp_tools === null ? "no MCP" : `${grant.mcp_tools.length} MCP`;
+  const subagentSummary = `${grant.subagent_backends?.length ?? 0} agents`;
 
   if (loading && !resources) {
     return (
@@ -466,6 +471,9 @@ export function GrantEditor({
               </span>
               <span className="rounded-full bg-[var(--muted)]/60 px-2 py-1">
                 {mcpSummary}
+              </span>
+              <span className="rounded-full bg-[var(--muted)]/60 px-2 py-1">
+                {subagentSummary}
               </span>
             </div>
           </div>
@@ -804,6 +812,41 @@ export function GrantEditor({
                     No MCP servers configured.
                   </p>
                 ))}
+            </section>
+
+            <section className="min-w-0">
+              <SectionTitle>Connected Agent backends</SectionTitle>
+              <ModeSwitch
+                isCustom={grant.subagent_backends !== null}
+                disabled={controlsDisabled}
+                defaultLabel="Default · none"
+                onDefault={() => setToolList("subagent_backends", null)}
+                onCustom={() => setToolList("subagent_backends", [])}
+              />
+              <p className="mb-2 px-1 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                These backends use deployment credentials and stay denied until
+                explicitly assigned.
+              </p>
+              {grant.subagent_backends !== null && (
+                <div className="space-y-1.5 text-xs">
+                  {(resources?.subagent_backends || []).map((backend) => (
+                    <CheckRow
+                      key={backend.kind}
+                      label={backend.name}
+                      description={`${backend.local_cli ? "Host CLI" : "Remote gateway"}${backend.enabled ? "" : " · disabled by operator"}`}
+                      checked={grant.subagent_backends!.includes(backend.kind)}
+                      disabled={
+                        controlsDisabled ||
+                        (!backend.enabled &&
+                          !grant.subagent_backends!.includes(backend.kind))
+                      }
+                      onToggle={() =>
+                        toggleGrantTool("subagent_backends", backend.kind)
+                      }
+                    />
+                  ))}
+                </div>
+              )}
             </section>
             <section className="min-w-0">
               <SectionTitle>Code execution</SectionTitle>

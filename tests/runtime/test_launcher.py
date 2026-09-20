@@ -307,6 +307,42 @@ class _CompletedProcess:
         self.returncode = returncode
 
 
+@pytest.mark.parametrize("version", ["v24.0.0", "25.3.1"])
+def test_require_supported_node_accepts_24_and_newer(monkeypatch, version: str) -> None:
+    monkeypatch.setattr(
+        launcher.subprocess,
+        "run",
+        lambda *_a, **_kw: SimpleNamespace(returncode=0, stdout=version, stderr=""),
+    )
+
+    assert launcher._require_supported_node("/runtime/node") == "/runtime/node"
+
+
+@pytest.mark.parametrize("version", ["v20.19.0", "v22.21.1"])
+def test_require_supported_node_rejects_older_runtimes(monkeypatch, version: str) -> None:
+    monkeypatch.setattr(
+        launcher.subprocess,
+        "run",
+        lambda *_a, **_kw: SimpleNamespace(returncode=0, stdout=version, stderr=""),
+    )
+
+    with pytest.raises(SystemExit, match=r"Node.js 24\+"):
+        launcher._require_supported_node("/runtime/node")
+
+
+def test_require_supported_node_rejects_missing_or_unparseable_runtime(monkeypatch) -> None:
+    with pytest.raises(SystemExit, match=r"Node.js 24\+"):
+        launcher._require_supported_node(None)
+
+    monkeypatch.setattr(
+        launcher.subprocess,
+        "run",
+        lambda *_a, **_kw: SimpleNamespace(returncode=0, stdout="nightly", stderr=""),
+    )
+    with pytest.raises(SystemExit, match="Could not parse"):
+        launcher._require_supported_node("/runtime/node")
+
+
 def test_ensure_web_dependencies_runs_npm_ci_when_a_lockfile_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -389,6 +425,7 @@ def test_source_frontend_defaults_to_cached_production_build(
     monkeypatch.setattr(launcher, "_packaged_web_dir", lambda: None)
     monkeypatch.setattr(launcher, "_source_web_dir", lambda _home: source)
     monkeypatch.setattr(launcher.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(launcher, "_require_supported_node", lambda node: str(node))
     monkeypatch.setattr(
         launcher,
         "_ensure_source_production_build",
@@ -420,6 +457,7 @@ def test_source_frontend_dev_mode_is_explicit_and_skips_production_build(
     monkeypatch.setattr(launcher, "_packaged_web_dir", lambda: None)
     monkeypatch.setattr(launcher, "_source_web_dir", lambda _home: source)
     monkeypatch.setattr(launcher.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(launcher, "_require_supported_node", lambda node: str(node))
     monkeypatch.setattr(
         launcher,
         "_ensure_source_production_build",

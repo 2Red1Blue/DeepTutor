@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import signal
@@ -58,6 +59,7 @@ def _ready_timeout(env_name: str, default: int) -> int:
 BACKEND_READY_TIMEOUT = _ready_timeout(BACKEND_READY_TIMEOUT_ENV, 60)
 FRONTEND_READY_TIMEOUT = _ready_timeout(FRONTEND_READY_TIMEOUT_ENV, 120)
 FRONTEND_REUSE_PROBE_TIMEOUT = 2
+MIN_NODE_MAJOR = 24
 KILL_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 WEB_CACHE_DIR = Path("data") / "user" / "runtime" / "web"
 SOURCE_PRODUCTION_DIST_DIR = ".next-deeptutor"
@@ -124,6 +126,32 @@ class DetachedLauncherPaths:
     state: Path
     stop: Path
     log: Path
+
+
+def _require_supported_node(node: str | None) -> str:
+    """Return the Node executable after enforcing the Web runtime minimum."""
+
+    requirement = f"Node.js {MIN_NODE_MAJOR}+ is required to run DeepTutor Web."
+    if not node:
+        raise SystemExit(requirement)
+    try:
+        result = subprocess.run(
+            [node, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SystemExit(f"{requirement} Could not read {node!r}: {exc}") from exc
+    version = (result.stdout or result.stderr or "").strip()
+    match = re.fullmatch(r"v?(\d+)(?:\.\d+){0,2}", version)
+    if result.returncode != 0 or match is None:
+        found = version or f"exit {result.returncode}"
+        raise SystemExit(f"{requirement} Could not parse the installed version ({found}).")
+    if int(match.group(1)) < MIN_NODE_MAJOR:
+        raise SystemExit(f"{requirement} Found {version} at {node}.")
+    return node
 
 
 def _log(message: str) -> None:
@@ -809,8 +837,7 @@ def _resolve_frontend(
     packaged = _packaged_web_dir()
     node = shutil.which("node")
     if packaged is not None:
-        if not node:
-            raise SystemExit("Node.js 20+ is required to run the packaged DeepTutor Web app.")
+        node = _require_supported_node(node)
         runtime_web = _copy_packaged_web_if_needed(
             packaged,
             home=home,
@@ -821,6 +848,7 @@ def _resolve_frontend(
 
     source = _source_web_dir(home)
     if source is not None:
+        node = _require_supported_node(node)
         npm = shutil.which("npm")
         if not npm:
             raise SystemExit(
@@ -828,8 +856,6 @@ def _resolve_frontend(
             )
         _ensure_web_dependencies(source, npm)
         if not dev:
-            if not node:
-                raise SystemExit("Node.js 20+ is required to run the source production build.")
             _ensure_source_production_build(
                 source,
                 npm,

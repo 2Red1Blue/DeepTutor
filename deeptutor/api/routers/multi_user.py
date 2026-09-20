@@ -222,6 +222,35 @@ def _admin_partner_summary() -> list[dict[str, Any]]:
     ]
 
 
+def _admin_subagent_summary() -> list[dict[str, Any]]:
+    """Deployment backends an administrator may explicitly grant."""
+
+    from deeptutor.services.subagent import (
+        PARTNER_BACKEND_KIND,
+        get_backend,
+        list_backend_kinds,
+        load_subagent_settings,
+    )
+
+    settings = load_subagent_settings()
+    rows: list[dict[str, Any]] = []
+    for kind in list_backend_kinds():
+        if kind == PARTNER_BACKEND_KIND:
+            continue
+        backend = get_backend(kind)
+        if backend is None:
+            continue
+        rows.append(
+            {
+                "kind": kind,
+                "name": backend.display_name,
+                "local_cli": backend.local_cli,
+                "enabled": settings.backend(kind).enabled,
+            }
+        )
+    return rows
+
+
 def _reading_root(service: Any) -> Path:
     return service.get_workspace_feature_dir("reading")
 
@@ -350,6 +379,7 @@ async def admin_resources(_: object = Depends(require_admin)) -> dict[str, Any]:
         "knowledge_bases": _admin_kb_summary(),
         "skills": _admin_skill_summary(),
         "partners": _admin_partner_summary(),
+        "subagent_backends": _admin_subagent_summary(),
         "reading_materials": _admin_reading_summary(),
         "reading_extensions": [
             extension.manifest.model_dump() for extension in get_reading_extension_registry().all()
@@ -758,6 +788,11 @@ async def put_user_grants(
             "enabled_tools": grant.get("enabled_tools"),
             "mcp_tool_count": (
                 None if grant.get("mcp_tools") is None else len(grant.get("mcp_tools") or [])
+            ),
+            "subagent_backend_count": (
+                None
+                if grant.get("subagent_backends") is None
+                else len(grant.get("subagent_backends") or [])
             ),
             "exec_enabled": grant.get("exec_enabled"),
             "learning_policy": grant.get("learning_policy"),

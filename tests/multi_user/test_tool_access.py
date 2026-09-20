@@ -44,9 +44,10 @@ def test_normalize_migrates_v1_to_v2():
     assert "spaces" not in grant
     assert grant["knowledge_bases"] == [{"resource_id": "admin:kb:demo"}]
     assert grant["skills"] == [{"skill_id": "writer"}]
-    # Absent v2 fields default to unrestricted.
+    # Runtime policy owns absent-field semantics; the stored representation is null.
     assert grant["enabled_tools"] is None
     assert grant["mcp_tools"] is None
+    assert grant["subagent_backends"] is None
     assert grant["exec_enabled"] is None
 
 
@@ -56,11 +57,13 @@ def test_normalize_tool_lists_and_exec():
         {
             "enabled_tools": ["web_search", "", "  reason  "],
             "mcp_tools": [],
+            "subagent_backends": ["codex", "claude_code"],
             "exec_enabled": False,
         },
     )
     assert grant["enabled_tools"] == ["web_search", "reason"]
     assert grant["mcp_tools"] == []
+    assert grant["subagent_backends"] == ["codex", "claude_code"]
     assert grant["exec_enabled"] is False
     # Non-bool exec values fall back to "follow policy".
     assert normalize_grant("u_alice", {"exec_enabled": "yes"})["exec_enabled"] is None

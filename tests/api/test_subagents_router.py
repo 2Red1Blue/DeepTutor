@@ -10,8 +10,11 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+from deeptutor.services.subagent.config import BackendConfig
 
 try:
     from fastapi import FastAPI
@@ -65,12 +68,31 @@ class _FakeKBManager:
 def client(monkeypatch, tmp_path):
     manager = _FakeKBManager()
     monkeypatch.setattr(subagents_module, "current_kb_manager", lambda: manager)
+
+    def fake_resolve(kind, *, cwd="", require_workspace=True):
+        if kind not in {"claude_code", "codex", "hermes_remote", "partner"}:
+            from deeptutor.services.subagent import SubagentResolutionError
+
+            raise SubagentResolutionError("unknown_backend", f"Unknown agent kind: {kind!r}")
+        local_cli = kind not in {"hermes_remote", "partner"}
+        return SimpleNamespace(
+            backend=SimpleNamespace(kind=kind, local_cli=local_cli),
+            config=BackendConfig(),
+            cwd=str(Path(cwd)) if local_cli and require_workspace else "",
+            provenance={
+                "execution_profile": "native",
+                "runtime_owner": "deeptutor",
+                "backend_kind": kind,
+                "managed_receipt": False,
+            },
+        )
+
+    monkeypatch.setattr(subagents_module, "resolve_backend_execution", fake_resolve)
     monkeypatch.setattr(
         subagents_module,
-        "list_backend_kinds",
-        lambda: ["claude_code", "codex", "hermes_remote", "partner"],
+        "executable_backend_kinds",
+        lambda: {"claude_code", "codex", "hermes_remote"},
     )
-    monkeypatch.setattr(subagents_module, "assert_path_allowed", lambda p: Path(p))
     # Isolate settings persistence to a temp file — the PUT path otherwise
     # writes the developer's real data/user/settings/subagent.json.
     monkeypatch.setattr(
@@ -78,7 +100,7 @@ def client(monkeypatch, tmp_path):
         lambda: tmp_path / "subagent.json",
     )
 
-    async def fake_detect():
+    async def fake_detect(*, allowed_kinds=None):
         from deeptutor.services.subagent.types import DetectResult
 
         return [
@@ -235,7 +257,7 @@ def test_backend_options_endpoint_shape(client, monkeypatch):
     from deeptutor.services.subagent import models as models_mod
     from deeptutor.services.subagent.models import BackendOptions, ModelOption
 
-    async def fake_options():
+    async def fake_options(*, allowed_kinds=None):
         return [
             BackendOptions(
                 kind="codex",
@@ -284,7 +306,21 @@ def test_message_connection_streams_and_persists(client, monkeypatch, tmp_path):
             await on_event(SubagentEvent(kind="text", text="hi", meta={"merge_id": "txt:m:0"}))
             return ConsultResult(final_text="hi", session_id="sess-9", success=True, event_count=1)
 
-    monkeypatch.setattr("deeptutor.services.subagent.get_backend", lambda kind: _FakeBackend())
+    monkeypatch.setattr(
+        subagents_module,
+        "resolve_backend_execution",
+        lambda kind, **_kwargs: SimpleNamespace(
+            backend=_FakeBackend(),
+            config=BackendConfig(),
+            cwd="/tmp",
+            provenance={
+                "execution_profile": "native",
+                "runtime_owner": "deeptutor",
+                "backend_kind": kind,
+                "managed_receipt": False,
+            },
+        ),
+    )
 
     res = client.post(
         "/api/subagents/connections/MyClaude/message",
@@ -294,13 +330,17 @@ def test_message_connection_streams_and_persists(client, monkeypatch, tmp_path):
     lines = [json.loads(line) for line in res.text.splitlines() if line.strip()]
 
     # The user's own message heads the exchange.
-    assert lines[0] == {"channel": "user_question", "text": "hello"}
+    assert lines[0]["channel"] == "user_question"
+    assert lines[0]["text"] == "hello"
+    assert lines[0]["execution_profile"] == "native"
+    assert lines[0]["provenance"]["managed_receipt"] is False
     # The agent's event carries a sidebar-namespaced merge id.
     assert any(
         line.get("channel") == "text" and line.get("merge_id") == "side:txt:m:0" for line in lines
     )
     # The final line reports the session id, now persisted for the next turn.
     assert lines[-1]["done"] is True and lines[-1]["session_id"] == "sess-9"
+    assert lines[-1]["execution_profile"] == "native"
     assert sess.get_session(sess.session_key("chatA", "MyClaude")) == "sess-9"
 
 

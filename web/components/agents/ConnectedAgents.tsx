@@ -305,6 +305,15 @@ function ConnectModal({
       setError(tr({ zh: "请选择一个伙伴。", en: "Please pick a partner." }));
       return;
     }
+    if (!isPartner && !isRemote && !cwd.trim()) {
+      setError(
+        tr({
+          zh: "请选择当前工作区内的工作目录。",
+          en: "Choose a working directory inside the current workspace.",
+        }),
+      );
+      return;
+    }
     setSubmitting(true);
     setError("");
     try {
@@ -418,8 +427,8 @@ function ConnectModal({
             <div>
               <label className="mb-1.5 block text-[12px] font-medium text-[var(--foreground)]">
                 {tr({
-                  zh: "工作目录（可选）",
-                  en: "Working directory (optional)",
+                  zh: "工作目录",
+                  en: "Working directory",
                 })}
               </label>
               <input
@@ -429,6 +438,7 @@ function ConnectModal({
                   zh: "例如：/Users/you/project —— 智能体将在此目录运行",
                   en: "e.g. /Users/you/project — the agent runs here",
                 })}
+                required
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 font-mono text-[12px] text-[var(--foreground)] outline-none focus:border-[var(--ring)]"
               />
             </div>

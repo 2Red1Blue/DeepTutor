@@ -53,17 +53,18 @@ def get_backend(kind: str) -> SubagentBackend | None:
     return _BACKENDS.get(str(kind or "").strip())
 
 
-def _detectable_backends() -> list[SubagentBackend]:
+def _detectable_backends(allowed_kinds: set[str] | None = None) -> list[SubagentBackend]:
     return [
         backend
         for backend in _BACKENDS.values()
         if getattr(backend, "local_cli", True) or getattr(backend, "detectable", False)
+        if allowed_kinds is None or backend.kind in allowed_kinds
     ]
 
 
-async def detect_all() -> list[DetectResult]:
-    """Probe local CLIs and configured remote backends."""
-    backends = _detectable_backends()
+async def detect_all(*, allowed_kinds: set[str] | None = None) -> list[DetectResult]:
+    """Probe allowed local CLIs and configured remote backends."""
+    backends = _detectable_backends(allowed_kinds)
     results = await asyncio.gather(
         *(backend.detect() for backend in backends),
         return_exceptions=True,

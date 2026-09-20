@@ -12,6 +12,8 @@ export type GrantPayload = {
   enabled_tools: string[] | null;
   /** null = default (all MCP tools), [] = none, array = whitelist. */
   mcp_tools: string[] | null;
+  /** null/[] = none for ordinary users; array = deployment backend ids. */
+  subagent_backends: string[] | null;
   /** null = follow deployment exec policy, false = always disabled. */
   exec_enabled: boolean | null;
   learning_policy: LearningPolicy | null;
@@ -57,6 +59,12 @@ export type MultiUserResources = {
   }>;
   skills: Array<{ name: string; description?: string; tags?: string[] }>;
   partners: Array<{ partner_id: string; name: string; description?: string }>;
+  subagent_backends: Array<{
+    kind: string;
+    name: string;
+    local_cli: boolean;
+    enabled: boolean;
+  }>;
   reading_materials: Array<{
     material_id: string;
     title: string;

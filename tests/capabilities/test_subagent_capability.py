@@ -26,6 +26,14 @@ from deeptutor.services.subagent.config import BackendConfig
 from deeptutor.services.subagent.types import ConsultResult, SubagentEvent
 
 
+@pytest.fixture(autouse=True)
+def _allow_test_subagent_workspace(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "deeptutor.services.subagent.access._resolve_owner_workspace_cwd",
+        lambda cwd: str(cwd or "/workspace"),
+    )
+
+
 def _bind(monkeypatch, *, kind: str = "claude_code", cwd: str = "", name: str = "myagent") -> None:
     """Make ``resolve_kb_metadata`` report ``name`` as a connected subagent."""
     monkeypatch.setattr(
@@ -214,7 +222,7 @@ def _spec(state: dict, *, budget: int = 2) -> dict:
 @pytest.mark.asyncio
 async def test_consult_streams_events_and_threads_session(monkeypatch) -> None:
     backend = _FakeBackend()
-    monkeypatch.setattr("deeptutor.services.subagent.get_backend", lambda kind: backend)
+    monkeypatch.setattr("deeptutor.services.subagent.access.get_backend", lambda kind: backend)
     tool = ConsultSubagentTool()
     state: dict = {"count": 0, "session_id": None, "name": "myagent"}
     streamed: list[tuple[str, str, str]] = []
@@ -240,7 +248,7 @@ async def test_consult_streams_events_and_threads_session(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_consult_budget_is_authoritative(monkeypatch) -> None:
     backend = _FakeBackend()
-    monkeypatch.setattr("deeptutor.services.subagent.get_backend", lambda kind: backend)
+    monkeypatch.setattr("deeptutor.services.subagent.access.get_backend", lambda kind: backend)
     tool = ConsultSubagentTool()
     state: dict = {"count": 0, "session_id": None, "name": "myagent"}
 
@@ -271,7 +279,7 @@ async def test_session_id_persists_across_turns(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(sess, "_path", lambda: tmp_path / "subagent_sessions.json")
     _bind(monkeypatch)  # "myagent" → claude_code
     backend = _FakeBackend()
-    monkeypatch.setattr("deeptutor.services.subagent.get_backend", lambda kind: backend)
+    monkeypatch.setattr("deeptutor.services.subagent.access.get_backend", lambda kind: backend)
 
     cap = SubagentCapability()
     tool = ConsultSubagentTool()

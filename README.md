@@ -691,6 +691,8 @@ For faster setup, the Partner channel page can create a Feishu/Lark app or WeCom
 
 My Agents turns other agents into context for DeepTutor, and does two distinct things. **Connect a live agent** — Claude Code, Codex, Antigravity, Kimi, opencode, MiMo Code, Hermes Agent, OpenClaw, or DeepSeek Harness on your machine, or one of your Partners — and consult it from inside a chat turn: DeepTutor actually *runs* the other agent and streams its work into the Activity panel via the `consult_subagent` tool. Select it and its round limit with the Agent chip, or filter the same connected-agent list with `@`; the choice stays attached to the session.
 
+Connected Agents are native DeepTutor execution, not managed Personal Runtime or Agent Fabric work. Local CLIs require an explicit directory inside the selected workspace; deployment-owned CLI and remote-gateway credentials are admin-only unless the backend is explicitly assigned to an account. See [the runtime contract](docs/connected-agents-runtime-contract.md).
+
 <div align="center">
 <img src="assets/figs/web-1.4.6+/home/08-subagent%20demo%20with%20claude%20code.png" alt="Consulting a Claude Code subagent live" width="900">
 </div>

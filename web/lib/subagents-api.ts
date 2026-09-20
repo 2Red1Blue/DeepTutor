@@ -22,6 +22,15 @@ export interface SubagentConnection {
   description?: string;
   created_at?: string;
   updated_at?: string | null;
+  execution_profile?: "native";
+  provenance?: SubagentExecutionProvenance;
+}
+
+export interface SubagentExecutionProvenance {
+  execution_profile: "native";
+  runtime_owner: "deeptutor";
+  backend_kind: string;
+  managed_receipt: false;
 }
 
 /**
@@ -180,6 +189,8 @@ export interface SubagentStreamLine {
   done?: boolean;
   success?: boolean;
   session_id?: string;
+  execution_profile?: "native";
+  provenance?: SubagentExecutionProvenance;
 }
 
 /**

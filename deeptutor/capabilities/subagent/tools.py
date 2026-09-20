@@ -100,13 +100,38 @@ class ConsultSubagentTool(BaseTool):
                 success=False,
             )
 
-        from deeptutor.services.subagent import get_backend
+        from dataclasses import replace
 
-        backend = get_backend(str(spec.get("kind") or ""))
-        if backend is None:
-            return ToolResult(
-                content=f"Unknown subagent backend: {spec.get('kind')!r}", success=False
+        from deeptutor.services.subagent import (
+            BackendConfig,
+            SubagentResolutionError,
+            native_execution_provenance,
+            resolve_backend_execution,
+        )
+
+        try:
+            resolved = resolve_backend_execution(
+                str(spec.get("kind") or ""), cwd=str(spec.get("cwd") or "")
             )
+        except SubagentResolutionError as exc:
+            return ToolResult(
+                content=f"Connected Agent unavailable: {exc.detail}",
+                success=False,
+                metadata={
+                    "execution_profile": "native",
+                    "provenance": native_execution_provenance(str(spec.get("kind") or "")),
+                },
+            )
+        backend = resolved.backend
+        run_config = resolved.config
+        injected_config = spec.get("config")
+        if (
+            isinstance(injected_config, BackendConfig)
+            and not run_config.system_prompt.strip()
+            and injected_config.system_prompt.strip()
+        ):
+            run_config = replace(run_config, system_prompt=injected_config.system_prompt)
+        provenance = resolved.provenance
 
         state["count"] = int(state.get("count", 0)) + 1
         consult_index = state["count"]
@@ -120,6 +145,8 @@ class ConsultSubagentTool(BaseTool):
                 "subagent_name": name,
                 "subagent_channel": channel,
                 "consult_index": consult_index,
+                "execution_profile": "native",
+                "provenance": provenance,
             }
             # ``merge_id`` correlates a backend's start/finish (a web search) or
             # streaming deltas (the answer typing out) into one evolving row.
@@ -146,9 +173,9 @@ class ConsultSubagentTool(BaseTool):
             result = await backend.consult(
                 question,
                 on_event=on_event,
-                cwd=spec.get("cwd") or None,
+                cwd=resolved.cwd or None,
                 session_id=state.get("session_id"),
-                config=spec.get("config"),
+                config=run_config,
                 images=image_paths or None,
                 partner_id=spec.get("partner_id") or None,
             )
@@ -173,7 +200,7 @@ class ConsultSubagentTool(BaseTool):
                     str(session_key_value),
                     result.session_id,
                     kind=backend.kind,
-                    cwd=str(spec.get("cwd") or ""),
+                    cwd=resolved.cwd,
                 )
 
         remaining = max(0, budget - consult_index)
@@ -182,6 +209,8 @@ class ConsultSubagentTool(BaseTool):
             "consult_index": consult_index,
             "consult_remaining": remaining,
             "event_count": result.event_count,
+            "execution_profile": "native",
+            "provenance": provenance,
         }
         if not result.final_text:
             detail = result.error or "the agent produced no final answer text"

@@ -48,6 +48,12 @@ def empty_grant(user_id: str) -> dict[str, Any]:
         "enabled_tools": None,
         "mcp_tools": None,
         "cli_apps": None,
+        # Local agent CLIs and configured remote agent gateways execute with
+        # deployment-owned credentials.  Ordinary accounts therefore receive
+        # no backend access until an administrator grants explicit backend ids.
+        # ``None`` is retained in storage for adjacent grant compatibility;
+        # runtime resolution interprets it as deny-all for non-admin users.
+        "subagent_backends": None,
         "exec_enabled": None,
         "learning_policy": None,
     }
@@ -107,7 +113,8 @@ def normalize_grant(user_id: str, payload: dict[str, Any] | None) -> dict[str, A
 
     v1 grants normalize losslessly for everything that was ever enforced:
     ``models.embedding`` / ``models.search`` / ``spaces`` had no runtime
-    consumers and are dropped; absent v2 fields default to unrestricted.
+    consumers and are dropped. Runtime access owns each absent-field default;
+    deployment capabilities such as MCP, CLI apps, and subagents fail closed.
     """
     base = empty_grant(user_id)
     if not isinstance(payload, dict):
@@ -125,7 +132,7 @@ def normalize_grant(user_id: str, payload: dict[str, Any] | None) -> dict[str, A
         raw = payload.get(key)
         values = raw if isinstance(raw, list) else []
         base[key] = [dict(item) for item in values if isinstance(item, dict)]
-    for key in ("enabled_tools", "mcp_tools", "cli_apps"):
+    for key in ("enabled_tools", "mcp_tools", "cli_apps", "subagent_backends"):
         base[key] = _normalize_tool_list(payload.get(key))
     exec_enabled = payload.get("exec_enabled")
     base["exec_enabled"] = bool(exec_enabled) if isinstance(exec_enabled, bool) else None
@@ -141,6 +148,7 @@ def learner_grant(user_id: str) -> dict[str, Any]:
             "enabled_tools": [],
             "mcp_tools": [],
             "cli_apps": [],
+            "subagent_backends": [],
             "exec_enabled": False,
             "learning_policy": {
                 "age_band": "9-12",
@@ -202,6 +210,17 @@ def validate_grant(grant: dict[str, Any]) -> None:
                 walk(child, f"{trail}[{index}]")
 
     walk(grant)
+    subagent_backends = grant.get("subagent_backends")
+    if subagent_backends is not None:
+        from deeptutor.services.subagent import PARTNER_BACKEND_KIND, list_backend_kinds
+
+        known = set(list_backend_kinds()) - {PARTNER_BACKEND_KIND}
+        unknown_backends = set(subagent_backends) - known
+        if unknown_backends:
+            raise ValueError(
+                "subagent_backends contains unsupported values: "
+                f"{', '.join(sorted(unknown_backends))}"
+            )
     policy = grant.get("learning_policy")
     if policy is None:
         return
