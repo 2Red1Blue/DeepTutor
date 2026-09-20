@@ -94,6 +94,32 @@ def test_multi_worker_execution_fails_closed_if_startup_was_bypassed(monkeypatch
     assert excinfo.value.code == "multi_worker_unsupported"
 
 
+@pytest.mark.parametrize("kind", ["codex", "partner"])
+def test_competing_process_blocks_deployment_and_partner_backends(kind: str, monkeypatch) -> None:
+    from deeptutor.services.subagent import process_ownership
+
+    backend = SimpleNamespace(kind=kind, local_cli=kind != "partner")
+    monkeypatch.setattr(access, "get_backend", lambda _kind: backend)
+    monkeypatch.setattr(
+        "deeptutor.services.config.load_system_settings",
+        lambda: {"backend_workers": 1},
+    )
+
+    def reject_competing_process():
+        raise process_ownership.ConnectedAgentProcessOwnershipError("owned elsewhere")
+
+    monkeypatch.setattr(
+        process_ownership,
+        "ensure_connected_agent_process_ownership",
+        reject_competing_process,
+    )
+
+    with pytest.raises(access.SubagentResolutionError) as excinfo:
+        access.resolve_backend_execution(kind, require_workspace=False)
+    assert excinfo.value.code == "multi_worker_unsupported"
+    assert excinfo.value.detail == "owned elsewhere"
+
+
 def test_ungranted_backend_is_rejected_before_workspace_resolution(monkeypatch) -> None:
     backend = SimpleNamespace(kind="codex", local_cli=True)
     monkeypatch.setattr(access, "get_backend", lambda _kind: backend)

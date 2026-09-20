@@ -122,6 +122,15 @@ def _assert_single_worker_execution() -> None:
             "Connected Agents are unavailable when backend_workers > 1 until their "
             "backend-session registry has a distributed lease.",
         )
+    from deeptutor.services.subagent.process_ownership import (
+        ConnectedAgentProcessOwnershipError,
+        ensure_connected_agent_process_ownership,
+    )
+
+    try:
+        ensure_connected_agent_process_ownership()
+    except ConnectedAgentProcessOwnershipError as exc:
+        raise SubagentResolutionError("multi_worker_unsupported", str(exc)) from exc
 
 
 def resolve_backend_execution(
