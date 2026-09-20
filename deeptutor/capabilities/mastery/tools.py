@@ -785,6 +785,10 @@ class MasteryQuizTool(BaseTool):
                         "card renders 'options' as its own labelled, clickable "
                         "list, so a stem that repeats them shows every choice "
                         "twice. Naming one option to ask about it is fine."
+                        " Make the stem self-contained for later practice: include "
+                        "all required code, data, scenario details and diagrams "
+                        "(Markdown or Mermaid). Do not refer only to a figure or "
+                        "example in an earlier message."
                     ),
                 ),
                 ToolParameter(

@@ -3,8 +3,8 @@
 This replaces the deleted TutorBot engine. A partner has NO engine of its
 own: every inbound message becomes one chat turn executed by
 ``TurnEngine`` → ``AgenticChatPipeline`` (the exact loop the product
-chat uses), run inside the partner's synthetic user scope so rag / skills /
-notebook tools read the partner workspace natively.
+chat uses), run inside the bound owner workspace or the partner's private
+synthetic user scope so rag / skills / notebook tools share that data scope.
 
 Event → IM mapping:
 
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass
 import hashlib
 import json
@@ -35,7 +36,7 @@ import uuid
 
 from deeptutor.core.context import Attachment, UnifiedContext
 from deeptutor.core.stream import StreamEvent, StreamEventType
-from deeptutor.multi_user.paths import get_current_path_service, user_context
+from deeptutor.multi_user.paths import get_path_service_for_scope
 from deeptutor.partners.bus.events import InboundMessage, OutboundMessage
 from deeptutor.partners.bus.queue import MessageBus
 from deeptutor.partners.helpers import detect_image_mime
@@ -48,9 +49,10 @@ from deeptutor.services.partners.interaction import (
     session_store_for,
 )
 from deeptutor.services.partners.links import linked_user_id
-from deeptutor.services.partners.scope import partner_user
+from deeptutor.services.partners.scope import partner_scope
 from deeptutor.services.partners.sessions import PartnerSessionStore, conversation_scope
 from deeptutor.services.partners.workspace import ensure_partner_workspace, read_soul
+from deeptutor.services.partners.workspace_binding import partner_content_context
 
 logger = logging.getLogger(__name__)
 
@@ -346,7 +348,15 @@ class PartnerRunner:
                         "assistant",
                         final,
                         channel=msg.channel,
-                        metadata=activity_meta,
+                        metadata={
+                            **(activity_meta or {}),
+                            **(
+                                {"model_turn": inbound_meta["_model_turn"]}
+                                if inbound_meta.get("_model_turn")
+                                else {}
+                            ),
+                        }
+                        or None,
                         events=turn_events or None,
                     )
             return final
@@ -453,7 +463,12 @@ class PartnerRunner:
         # the model catalog lives in the admin workspace, and the scoped config
         # rides the same async context into the orchestrator task.
         llm_token = None
+        content_stack = ExitStack()
+        msg.metadata.pop("_model_turn", None)
         try:
+            shared_workspace = bool(getattr(self.config, "workspace_id", ""))
+            if shared_workspace:
+                content_stack.enter_context(partner_content_context(self.partner_id, self.config))
             options = options or PartnerTurnOptions()
             context = self._build_context(msg, store=store, options=options)
             turn_id = str(context.metadata.get("turn_id") or "")
@@ -467,18 +482,30 @@ class PartnerRunner:
             wants_stream = is_im and send_progress and bool(msg.metadata.get("_wants_stream"))
 
             _config, llm_token = activate_llm_selection(selection)
-            # RAG / skills / notebooks resolve to the Partner's shared synthetic
-            # workspace. Partner-only memory tools additionally read the turn
+            if options.conversation_history is None:
+                context.runtime.model_history = store.model_history(
+                    session_key=msg.session_key,
+                    route={
+                        "provider": _config.binding,
+                        "model": _config.model,
+                    },
+                )
+            # RAG / skills / notebooks use the bound content workspace or the
+            # Partner's private synthetic scope. Memory tools read the turn
             # context below: assigned users get a private relationship-memory
             # directory and their own L3 as read-only shared context; admin and
             # IM turns retain the legacy Partner/admin paths. Product-chat
             # read_memory / write_memory remain suppressed on Partner turns.
-            with user_context(partner_user(self.partner_id, name=self.config.name)):
+            with (
+                nullcontext()
+                if shared_workspace
+                else partner_content_context(self.partner_id, self.config)
+            ):
                 turn_context = build_partner_turn_context(
                     self.partner_id,
                     msg.actor,
                     store,
-                    legacy_own_memory=get_current_path_service(),
+                    legacy_own_memory=get_path_service_for_scope(partner_scope(self.partner_id)),
                     partner_name=self.config.name,
                 )
                 with partner_turn_context(turn_context):
@@ -556,7 +583,10 @@ class PartnerRunner:
             logger.exception("Partner %s turn crashed", self.partner_id)
             errors.append(f"{type(exc).__name__}: {exc}")
         finally:
+            if context is not None and context.runtime.model_turn is not None:
+                msg.metadata["_model_turn"] = context.runtime.model_turn
             reset_llm_selection(llm_token)
+            content_stack.close()
 
         if not final_text.strip():
             final_text = terminator_text.strip()
@@ -631,12 +661,21 @@ class PartnerRunner:
         )
         msg.metadata["_attachment_records"] = attachment_records
 
-        # Partner-scope context blocks (soul / skills / KBs) are assembled
-        # inside the partner scope so the same service locators the chat
-        # turn-runtime uses resolve to the partner workspace.
-        with user_context(partner_user(self.partner_id, name=self.config.name)):
+        # Assemble resource context in the same scope the turn's tools use.
+        # The Soul remains in the Partner's private store in either mode.
+        with partner_content_context(self.partner_id, self.config):
             skills_manifest = self._build_skills_manifest()
             kb_names = self._list_kb_names()
+            workspace_runtime = None
+            if getattr(self.config, "workspace_id", ""):
+                from deeptutor.services.workspace import get_content_workspace_service
+
+                workspace_runtime = get_content_workspace_service().create_runtime_context(
+                    capability="chat",
+                    session_id=f"partner:{self.partner_id}:{session_key}",
+                    turn_id=turn_id,
+                    workspace_id=self.config.workspace_id,
+                )
 
         metadata: dict[str, Any] = {
             "turn_id": turn_id,
@@ -727,10 +766,21 @@ class PartnerRunner:
                 "that approval-gated protocol; otherwise finish with your own answer."
             ).strip()
 
+        from deeptutor.core.context import TurnRuntimeContext
+
         return UnifiedContext(
             session_id=f"partner:{self.partner_id}:{session_key}",
             user_message=user_message,
             conversation_history=history,
+            runtime=TurnRuntimeContext(
+                workspace=workspace_runtime,
+                model_history=store.model_history(session_key)
+                if options.conversation_history is None
+                else None,
+                previous_model_turn=store.previous_model_turn(session_key)
+                if options.conversation_history is None
+                else None,
+            ),
             enabled_tools=self._resolved_enabled_tools(),
             allowed_builtin_tools=self._resolved_builtin_tools(),
             active_capability="chat",
@@ -781,6 +831,10 @@ class PartnerRunner:
         return [str(name) for name in configured]
 
     def _build_skills_manifest(self) -> str:
+        if getattr(self.config, "workspace_id", ""):
+            from deeptutor.services.skill.runtime import skill_manifest
+
+            return skill_manifest()
         try:
             from deeptutor.services.skill.service import (
                 get_skill_service,
@@ -800,6 +854,20 @@ class PartnerRunner:
             return ""
 
     def _list_kb_names(self) -> list[str]:
+        if getattr(self.config, "workspace_id", ""):
+            from deeptutor.knowledge.kb_types import supports_rag_retrieval
+            from deeptutor.multi_user.knowledge_access import (
+                list_visible_knowledge_bases,
+                resolve_kb_metadata,
+            )
+
+            return [
+                row["id"]
+                for row in list_visible_knowledge_bases()
+                if row.get("available") is not False
+                and (metadata := resolve_kb_metadata(row["id"])) is not None
+                and supports_rag_retrieval(metadata)
+            ]
         try:
             from deeptutor.knowledge.manager import KnowledgeBaseManager
             from deeptutor.services.path_service import get_path_service

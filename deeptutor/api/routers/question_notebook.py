@@ -81,6 +81,7 @@ class NotebookEntryItem(BaseModel):
     created_at: float
     updated_at: float
     categories: list[CategoryItem] | None = None
+    practice: dict[str, Any] | None = None
 
 
 class NotebookEntryListResponse(BaseModel):
@@ -292,6 +293,7 @@ async def _course_session_ids(store: Any, course_id: str) -> list[str] | None:
 @router.get("/entries", response_model=NotebookEntryListResponse)
 async def list_entries(
     category_id: int | None = Query(default=None),
+    mistakes_only: bool = Query(default=False),
     uncategorized: bool = Query(
         default=False,
         description="Only entries filed under no category — the triage inbox. "
@@ -318,6 +320,7 @@ async def list_entries(
     session_ids = await _course_session_ids(store, course_id)
     listing = await store.list_notebook_entries(
         category_id=category_id,
+        mistakes_only=mistakes_only,
         uncategorized=uncategorized,
         bookmarked=bookmarked,
         is_correct=is_correct,

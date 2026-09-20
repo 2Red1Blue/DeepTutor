@@ -1456,34 +1456,22 @@ class ReadSkillTool(_PromptHintsMixin, BaseTool):
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        from deeptutor.services.skill import get_skill_service
         from deeptutor.services.skill.service import (
             InvalidSkillNameError,
             InvalidSkillPathError,
             SkillFileNotFoundError,
             SkillNotFoundError,
-            SkillService,
         )
 
-        name = str(kwargs.get("name") or "").strip()
+        name = str(kwargs.get("name") or "").strip().lower()
         rel_path = str(kwargs.get("file") or "SKILL.md").strip() or "SKILL.md"
         if not name:
             raise ValueError("read_skill requires a skill name.")
 
-        services: list[SkillService] = [get_skill_service()]
-        try:
-            from deeptutor.multi_user.context import get_current_user
-            from deeptutor.multi_user.paths import get_admin_path_service
-            from deeptutor.multi_user.skill_access import assigned_skill_ids
+        from deeptutor.services.skill.runtime import runtime_skills
 
-            user = get_current_user()
-            if not user.is_admin and name in assigned_skill_ids(user.id):
-                services.append(
-                    SkillService(root=get_admin_path_service().get_workspace_dir() / "skills")
-                )
-        except Exception:
-            logger.debug("read_skill: assigned-skill scope unavailable", exc_info=True)
-
+        visible = runtime_skills()
+        services = [visible[name]] if name in visible else []
         for service in services:
             try:
                 content = service.read_skill_file(name, rel_path)
@@ -1512,9 +1500,7 @@ class ReadSkillTool(_PromptHintsMixin, BaseTool):
                 content=content,
                 metadata={"skill": name, "file": rel_path, "char_count": len(content)},
             )
-        available_names: set[str] = set()
-        for service in services:
-            available_names.update(skill.name for skill in service.list_skills())
+        available_names = set(visible)
         available_skills = ", ".join(sorted(available_names))
         available_hint = f". Available skills: {available_skills}" if available_skills else ""
         return ToolResult(

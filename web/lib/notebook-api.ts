@@ -235,6 +235,13 @@ export interface NotebookEntry {
   created_at: number;
   updated_at: number;
   categories?: NotebookCategory[];
+  practice?: {
+    is_mistake: boolean | number;
+    due_at: number;
+    review_count: number;
+    last_answer: string | null;
+    last_rating: "again" | "hard" | "good" | "easy" | null;
+  } | null;
 }
 
 export interface NotebookCategory {
@@ -249,7 +256,8 @@ export type AssessmentSource =
   | "mastery_path"
   | "immersive_reading"
   | "book"
-  | "partner_chat";
+  | "partner_chat"
+  | "import";
 
 export type AssessmentType = "quiz" | "focus_check" | "qualitative" | "review";
 
@@ -293,6 +301,7 @@ async function expectJson<T>(response: Response): Promise<T> {
 // ── Entries ──────────────────────────────────────────────────────
 
 export interface NotebookEntryFilter {
+  mistakes_only?: boolean;
   category_id?: number;
   /** Only entries in no category at all — the triage inbox. */
   uncategorized?: boolean;
@@ -325,6 +334,7 @@ export async function listNotebookEntries(
   filter: NotebookEntryFilter = {},
 ): Promise<NotebookEntryListResponse> {
   const params = new URLSearchParams();
+  if (filter.mistakes_only) params.set("mistakes_only", "true");
   if (filter.category_id !== undefined)
     params.set("category_id", String(filter.category_id));
   if (filter.uncategorized) params.set("uncategorized", "true");

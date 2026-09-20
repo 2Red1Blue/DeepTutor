@@ -519,7 +519,7 @@ class LearningStore:
                 ).fetchone()
                 if already_applied is None:
                     for row in conn.execute(
-                        "SELECT path_id, state_json FROM mastery_paths"
+                        "SELECT path_id, state_json, revision FROM mastery_paths"
                     ).fetchall():
                         try:
                             progress = self._progress_from_row(row)
@@ -832,7 +832,7 @@ class LearningStore:
             params.append(bounded_limit)
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT evidence_json FROM mastery_learning_evidence "
+                "SELECT evidence_json FROM mastery_learning_evidence "  # nosec B608 - fixed clauses; values bound
                 f"WHERE {' AND '.join(clauses)} ORDER BY ordinal DESC{limit_sql}",
                 tuple(params),
             ).fetchall()
@@ -882,6 +882,7 @@ class LearningStore:
     def count_learning_evidence(self, book_id: str, knowledge_point_id: str | None = None) -> int:
         path_id = self._validate_id(book_id)
         self._import_legacy_if_needed(path_id)
+        args: tuple[str, ...]
         if knowledge_point_id:
             query = "SELECT COUNT(*) AS count FROM mastery_learning_evidence WHERE path_id = ? AND knowledge_point_id = ?"
             args = (path_id, str(knowledge_point_id))

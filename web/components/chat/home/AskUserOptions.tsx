@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Pencil } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -347,10 +347,12 @@ export function extractMessageSegments(
   // A round a capability rejected was streamed and then taken back: its text
   // is trace material, never answer text. Ordinary commentary stays.
   const retractedCallIds = collectRetractedCallIds(events);
-  // Calls the reader sees as a card. The card IS that call's presentation, so
-  // drawing an "asked you a question" row for it as well says the same thing
-  // twice — and that row lands *below* the card it produced, reading as work
-  // done after the question rather than as the asking of it.
+  // Calls the reader sees as a card. Their *payloads* are not trace material
+  // — the card is what those say. The call itself is: stopping to ask is a
+  // step the agent took, and a trace with no row for it claims the answers
+  // appeared out of nowhere. So the ``tool_call`` row stays and everything
+  // else about a card's call (its result payload, its draft previews) is
+  // dropped, leaving the row above the card it opened.
   // Both id fields are collected because the two sides name the call
   // differently: a dispatched result carries ``tool_call_id`` while the trace
   // groups rows by ``call_id``, and which one a given event has depends on the
@@ -375,7 +377,13 @@ export function extractMessageSegments(
 
   /** Collect one trace event into the region currently open below the text. */
   const appendTraceEvent = (event: StreamEvent) => {
-    if (callIdsOf(event).some((id) => cardCallIds.has(id))) return;
+    if (producesCard(event)) return;
+    if (
+      event.type !== "tool_call" &&
+      callIdsOf(event).some((id) => cardCallIds.has(id))
+    ) {
+      return;
+    }
     // Where this event sat in the answer, when it recorded one. A live turn
     // records none — its text is on the wire and separates the regions by
     // itself. A reloaded one has no text events at all, so this mark is the
@@ -414,6 +422,21 @@ export function extractMessageSegments(
       if (callId && retractedCallIds.has(callId)) {
         appendTraceEvent(event);
         continue;
+      }
+      // Keep the transition to answer text with the preceding reasoning
+      // trace so it can fold before the whole model call finishes. Only the
+      // first delta is needed; subsequent answer deltas stay in the text.
+      if (pendingTraceIdx !== null && callId) {
+        const trace = segments[pendingTraceIdx];
+        if (
+          trace.kind === "trace" &&
+          trace.events.some(
+            (entry) =>
+              entry.type === "thinking" && entry.metadata?.call_id === callId,
+          )
+        ) {
+          trace.events.push(event);
+        }
       }
       const idx = ensureTextSegment();
       const seg = segments[idx];
@@ -883,16 +906,15 @@ function normaliseAskUserPayload(
   };
 }
 
-const LETTERS = "ABCDEFGH"; // matches MAX_OPTIONS=8
-
 /**
  * Render the ``ask_user`` card.
  *
- * Two visual modes share the same outer container so the card stays
- * in place in the message stream — never unmounts. Switches from
- * ``interactive`` (the agent is still paused) to ``resolved`` (the
- * user has submitted) once a ``progress`` event with
- * ``ask_user_resolved=true`` arrives in the message events.
+ * Both visual modes are drawn on the same shell — same radius, border and
+ * padding — so answering does not swap one panel for another: the question
+ * fades to muted, the answer takes its place, and the card keeps its spot in
+ * the message stream. Switches from ``interactive`` (the agent is still
+ * paused) to ``resolved`` (the user has submitted) once a ``progress`` event
+ * with ``ask_user_resolved=true`` arrives in the message events.
  */
 export const AskUserOptions = memo(function AskUserOptions({
   data,
@@ -912,10 +934,10 @@ export const AskUserOptions = memo(function AskUserOptions({
     answers?: Array<{ questionId: string; text: string }>;
   }) => void | boolean | Promise<void | boolean>;
   /** When true, the resolved Q&A card renders with an inline toggle so
-   * the user can hide / show the question + answer summary. Resolved cards
-   * default to collapsible+collapsed (the Q&A history stays addressable
-   * without dominating the bubble); callers can override explicitly —
-   * research keeps its own phase-driven rule. */
+   * the user can hide / show the question + answer summary. Off by default:
+   * an answered exchange is two short lines, so folding it away costs more
+   * than it saves. Research turns it on to clear the bubble for the outline
+   * editor once the outline takes over. */
   collapsible?: boolean;
   /** Only honoured when ``collapsible`` is true. */
   defaultCollapsed?: boolean;
@@ -925,8 +947,8 @@ export const AskUserOptions = memo(function AskUserOptions({
       <ResolvedAskUserCard
         payload={data.payload}
         answers={data.answers ?? []}
-        collapsible={collapsible ?? true}
-        defaultCollapsed={defaultCollapsed ?? true}
+        collapsible={collapsible ?? false}
+        defaultCollapsed={defaultCollapsed ?? false}
       />
     );
   }
@@ -1011,21 +1033,35 @@ const InteractiveAskUserCard = memo(function InteractiveAskUserCard({
     [payload.questions, answers],
   );
 
+  /**
+   * Send one specific answer table, rather than whatever ``answers`` holds.
+   *
+   * A skip clears the current question and submits in the same click, and
+   * ``setState`` has not landed by then — so the caller passes the table it
+   * means, and "skipped" cannot go out carrying the pick it just cleared.
+   */
+  const submitAnswers = useCallback(
+    (finalAnswers: Record<string, string>) => {
+      const list: Array<{ questionId: string; text: string }> =
+        payload.questions.map((q) => ({
+          questionId: q.id,
+          text: (finalAnswers[q.id] ?? "").trim(),
+        }));
+      // Always include a flat ``text`` synopsis for back-compat with any
+      // older server path that only looks at ``text``.
+      const flat = list
+        .map(({ text }) => text)
+        .filter(Boolean)
+        .join(" | ");
+      void submit({ text: flat, answers: list });
+    },
+    [payload.questions, submit],
+  );
+
   const handleSubmit = useCallback(() => {
     if (locked) return;
-    const list: Array<{ questionId: string; text: string }> =
-      payload.questions.map((q) => ({
-        questionId: q.id,
-        text: (answers[q.id] ?? "").trim(),
-      }));
-    // Always include a flat ``text`` synopsis for back-compat with any
-    // older server path that only looks at ``text``.
-    const flat = list
-      .map(({ text }) => text || "(skipped)")
-      .filter((s) => s !== "(skipped)")
-      .join(" | ");
-    void submit({ text: flat, answers: list });
-  }, [locked, payload.questions, answers, submit]);
+    submitAnswers(answers);
+  }, [locked, answers, submitAnswers]);
 
   const pickOption = useCallback(
     (question: AskUserQuestion, label: string) => {
@@ -1074,45 +1110,118 @@ const InteractiveAskUserCard = memo(function InteractiveAskUserCard({
     setCustomSelected((prev) => ({ ...prev, [qid]: true }));
   }, []);
 
+  /**
+   * Decline the question on screen.
+   *
+   * On a multi-question card this means "not this one" — move on to whatever
+   * is still unanswered. On the last (or only) question there is nothing left
+   * to move to, so declining submits the card with this answer left empty,
+   * which the backend renders back to the model as ``(skipped)``.
+   */
+  const skipQuestion = useCallback(() => {
+    if (locked || !activeQuestion) return;
+    const qid = activeQuestion.id;
+    setPicks((prev) => ({ ...prev, [qid]: [] }));
+    setCustomSelected((prev) => ({ ...prev, [qid]: false }));
+    // Skip only ever walks forward. Wrapping round to a question the user
+    // has already declined would bounce the card between two skipped
+    // questions with no way out; reaching the end means there is nothing
+    // left to ask, so the card submits and the unanswered ones go as
+    // skipped.
+    for (let j = activeIdx + 1; j < totalQuestions; j++) {
+      if (!(answers[payload.questions[j].id] ?? "").trim()) {
+        setActiveIdx(j);
+        return;
+      }
+    }
+    submitAnswers({ ...answers, [qid]: "" });
+  }, [
+    locked,
+    activeQuestion,
+    totalQuestions,
+    activeIdx,
+    payload.questions,
+    answers,
+    submitAnswers,
+  ]);
+
+  /**
+   * Number keys pick the option carrying that number — what the badges are
+   * advertising by being numbered at all.
+   *
+   * Bound on ``window`` because the card is never the focused element (the
+   * composer usually is), so anything typed into a field, and anything with a
+   * modifier, belongs to whatever has focus and is left alone.
+   */
+  useEffect(() => {
+    if (locked || !activeQuestion || activeQuestion.options.length === 0) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT")
+      ) {
+        return;
+      }
+      const picked = Number(event.key);
+      if (
+        !Number.isInteger(picked) ||
+        picked < 1 ||
+        picked > activeQuestion.options.length
+      ) {
+        return;
+      }
+      event.preventDefault();
+      pickOption(activeQuestion, activeQuestion.options[picked - 1].label);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [locked, activeQuestion, pickOption]);
+
+  // The question itself is the card's headline — no icon, no standing
+  // instruction row. The status line below the intro only appears when there
+  // is something to say that the card's own shape does not already say
+  // (still being written, in flight, refused).
+  const status = streaming
+    ? t("Writing the question…")
+    : submitted
+      ? t("Sending your answers…")
+      : submitFailed
+        ? t(REPLY_NOT_DELIVERED)
+        : null;
+
   return (
-    <div className="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.04)]">
-      <div className="flex items-start gap-3">
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] text-[12px] font-semibold text-[var(--foreground)]/70">
-          ?
+    <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3.5 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.04)]">
+      {payload.intro || totalQuestions === 0 ? (
+        <div className="text-[12.5px] leading-snug text-[var(--muted-foreground)]">
+          {payload.intro ? (
+            <InlineMarkdown content={payload.intro} />
+          ) : (
+            t("Please answer to continue.")
+          )}
         </div>
-        <div className="flex-1">
-          <div className="text-[13px] font-medium leading-snug text-[var(--foreground)]">
-            {payload.intro ? (
-              <InlineMarkdown content={payload.intro} />
-            ) : (
-              t("Please answer to continue.")
-            )}
-          </div>
-          <div
-            className={
-              "mt-0.5 text-[11px] " +
-              (submitFailed
-                ? "text-[var(--destructive)]"
-                : "text-[var(--muted-foreground)]")
-            }
-          >
-            {streaming
-              ? t("Writing the question…")
-              : submitted
-                ? t("Sending your answers…")
-                : submitFailed
-                  ? t(REPLY_NOT_DELIVERED)
-                  : totalQuestions > 1
-                    ? t("{{count}} questions — tap a tab to switch.", {
-                        count: totalQuestions,
-                      })
-                    : t("Pick an option or type your own to continue.")}
-          </div>
+      ) : null}
+      {status ? (
+        <div
+          className={
+            "mt-0.5 text-[11px] " +
+            (submitFailed
+              ? "text-[var(--destructive)]"
+              : "text-[var(--muted-foreground)]")
+          }
+        >
+          {status}
         </div>
-      </div>
+      ) : null}
 
       {totalQuestions > 1 ? (
-        <div className="mt-3 flex flex-wrap gap-1.5">
+        <div className="mt-2 flex flex-wrap gap-1">
           {payload.questions.map((q, idx) => {
             const isActive = idx === activeIdx;
             const answered = (answers[q.id] ?? "").trim().length > 0;
@@ -1123,7 +1232,7 @@ const InteractiveAskUserCard = memo(function InteractiveAskUserCard({
                 onClick={() => setActiveIdx(idx)}
                 disabled={locked}
                 className={
-                  "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition-all " +
+                  "flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11.5px] font-medium transition-all " +
                   (isActive
                     ? "border-[var(--foreground)]/35 bg-[color-mix(in_srgb,var(--foreground)_5%,transparent)] text-[var(--foreground)]"
                     : "border-[var(--border)] bg-transparent text-[var(--muted-foreground)] hover:border-[var(--foreground)]/25 hover:text-[var(--foreground)]") +
@@ -1157,6 +1266,9 @@ const InteractiveAskUserCard = memo(function InteractiveAskUserCard({
           customDraft={customText[activeQuestion.id] ?? ""}
           customSelected={!!customSelected[activeQuestion.id]}
           locked={locked}
+          spaced={
+            Boolean(payload.intro) || status !== null || totalQuestions > 1
+          }
           onPickOption={(label) => pickOption(activeQuestion, label)}
           onSelectCustom={() => selectCustom(activeQuestion)}
           onCustomTextChange={(text) =>
@@ -1168,27 +1280,29 @@ const InteractiveAskUserCard = memo(function InteractiveAskUserCard({
         // for the question and its first option, so the card takes its place
         // in the thread at roughly the height it will settle at instead of
         // pushing the conversation down as each option arrives.
-        <div className="mt-3 flex flex-col gap-2" aria-hidden>
+        <div className="mt-2 flex flex-col gap-1.5" aria-hidden>
           <div className="h-4 w-2/3 animate-pulse rounded bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)]" />
           <div className="h-9 w-full animate-pulse rounded-xl bg-[color-mix(in_srgb,var(--foreground)_5%,transparent)]" />
         </div>
       )}
 
-      <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--border)]/60 pt-3">
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--border)]/60 pt-2">
         <div className="flex min-w-0 flex-1 items-center">
           {totalQuestions > 1 && activeIdx > 0 ? (
             <button
               type="button"
               onClick={() => setActiveIdx((idx) => Math.max(0, idx - 1))}
               disabled={locked}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-transparent px-2.5 py-1.5 text-[12px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--foreground)]/30 hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-transparent px-2 py-1 text-[12px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--foreground)]/30 hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <ChevronLeft size={14} strokeWidth={2} />
               <span>{t("Previous question")}</span>
             </button>
           ) : (
             <div className="text-[11.5px] text-[var(--muted-foreground)]">
-              {streaming
+              {/* Only a multi-question card needs telling how its parts add
+                  up; a single question says it with the Skip control alone. */}
+              {streaming || totalQuestions < 2
                 ? null
                 : allAnswered
                   ? t("All questions answered.")
@@ -1196,40 +1310,65 @@ const InteractiveAskUserCard = memo(function InteractiveAskUserCard({
             </div>
           )}
         </div>
-        {totalQuestions > 1 && activeIdx < totalQuestions - 1 ? (
-          <button
-            type="button"
-            onClick={() =>
-              setActiveIdx((idx) => Math.min(totalQuestions - 1, idx + 1))
-            }
-            disabled={locked}
-            className="inline-flex items-center gap-1 rounded-md bg-[var(--primary)] px-3 py-1.5 text-[12px] font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <span>{t("Next question")}</span>
-            <ChevronRight size={14} strokeWidth={2} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={locked}
-            className="rounded-md bg-[var(--primary)] px-3 py-1.5 text-[12px] font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {totalQuestions > 1 ? t("Submit answers") : t("Submit")}
-          </button>
-        )}
+        {/* Declining and answering are the same kind of act — both end this
+            question — so Skip belongs beside Submit rather than in a band of
+            its own above it. */}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {activeQuestion ? (
+            <button
+              type="button"
+              onClick={skipQuestion}
+              disabled={locked}
+              className="rounded-md border border-[var(--border)] px-2 py-1 text-[12px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--foreground)]/30 hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {t("Skip")}
+            </button>
+          ) : null}
+          {totalQuestions > 1 && activeIdx < totalQuestions - 1 ? (
+            <button
+              type="button"
+              onClick={() =>
+                setActiveIdx((idx) => Math.min(totalQuestions - 1, idx + 1))
+              }
+              disabled={locked}
+              className="inline-flex items-center gap-1 rounded-md bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <span>{t("Next question")}</span>
+              <ChevronRight size={14} strokeWidth={2} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={locked}
+              className="rounded-md bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {totalQuestions > 1 ? t("Submit answers") : t("Submit")}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
 });
 InteractiveAskUserCard.displayName = "InteractiveAskUserCard";
 
+/**
+ * One question: its prompt, its options, the free-text row and Skip.
+ *
+ * Options are rows, not boxes. Nesting a bordered control per option inside a
+ * bordered card reads as a form to fill in; a numbered row that lights up
+ * under the cursor reads as a list to pick from — the rule the mastery card
+ * already set for itself (see ``MasteryQuestionCard``). The number is not
+ * decoration: it is the key that picks that row.
+ */
 const QuestionBody = memo(function QuestionBody({
   question,
   pickedLabels,
   customDraft,
   customSelected,
   locked,
+  spaced,
   onPickOption,
   onSelectCustom,
   onCustomTextChange,
@@ -1239,6 +1378,8 @@ const QuestionBody = memo(function QuestionBody({
   customDraft: string;
   customSelected: boolean;
   locked: boolean;
+  /** Something is rendered above (intro, status, tabs) and needs clearing. */
+  spaced: boolean;
   onPickOption: (label: string) => void;
   onSelectCustom: () => void;
   onCustomTextChange: (text: string) => void;
@@ -1254,7 +1395,12 @@ const QuestionBody = memo(function QuestionBody({
 
   return (
     <>
-      <div className="mt-3 text-[14px] font-medium leading-snug text-[var(--foreground)]">
+      <div
+        className={
+          (spaced ? "mt-1.5 " : "") +
+          "text-[15px] font-medium leading-snug text-[var(--foreground)]"
+        }
+      >
         <InlineMarkdown content={question.prompt} />
         {question.multi_select ? (
           <span className="ml-1.5 text-[11px] font-normal text-[var(--muted-foreground)]">
@@ -1264,42 +1410,44 @@ const QuestionBody = memo(function QuestionBody({
       </div>
 
       {question.options.length > 0 ? (
-        <div className="mt-2 flex flex-col gap-1.5">
+        <div className="mt-1.5 flex flex-col">
           {question.options.map((option, idx) => {
-            const letter = LETTERS[idx] ?? String(idx + 1);
             const isPicked = question.multi_select
               ? pickedLabels.includes(option.label)
               : !customSelected && pickedLabels[0] === option.label;
             return (
               <button
-                key={`${letter}-${option.label}`}
+                key={`${idx}-${option.label}`}
                 type="button"
                 onClick={() => !locked && onPickOption(option.label)}
                 disabled={locked}
+                aria-pressed={isPicked}
                 className={
-                  "group flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition-all " +
+                  "group -mx-1.5 flex w-[calc(100%+0.75rem)] items-start gap-2.5 rounded-lg px-1.5 py-1 text-left transition-colors " +
                   (isPicked
-                    ? "border-[var(--primary)]/70 bg-[color-mix(in_srgb,var(--primary)_7%,var(--card))] text-[var(--foreground)]"
-                    : "border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] hover:border-[var(--foreground)]/30 hover:bg-[color-mix(in_srgb,var(--foreground)_3%,var(--card))]") +
+                    ? "bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)]"
+                    : locked
+                      ? ""
+                      : "hover:bg-[color-mix(in_srgb,var(--foreground)_3.5%,transparent)]") +
                   " disabled:cursor-not-allowed disabled:opacity-60"
                 }
               >
                 <span
                   className={
-                    "flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[12px] font-semibold transition-colors " +
+                    "flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[12px] font-semibold tabular-nums transition-colors " +
                     (isPicked
                       ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                      : "bg-[var(--muted)]/70 text-[var(--muted-foreground)] group-hover:bg-[color-mix(in_srgb,var(--foreground)_10%,transparent)] group-hover:text-[var(--foreground)]")
+                      : "bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] text-[var(--muted-foreground)] group-hover:text-[var(--foreground)]")
                   }
                 >
-                  {question.multi_select && isPicked ? "✓" : letter}
+                  {question.multi_select && isPicked ? "✓" : idx + 1}
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13.5px] leading-snug">
+                <span className="min-w-0 flex-1 pt-0.5">
+                  <span className="block text-[14px] font-medium leading-snug text-[var(--foreground)]">
                     <InlineMarkdown content={option.label} />
                   </span>
                   {option.description ? (
-                    <span className="mt-0.5 block text-[11.5px] leading-snug text-[var(--muted-foreground)]">
+                    <span className="mt-0.5 block text-[12.5px] leading-snug text-[var(--muted-foreground)]">
                       <InlineMarkdown content={option.description} />
                     </span>
                   ) : null}
@@ -1310,26 +1458,24 @@ const QuestionBody = memo(function QuestionBody({
         </div>
       ) : null}
 
+      {/* Saying it yourself is one more way to answer, so it reads as the last
+          row of the list — same badge slot, same hover — instead of sitting in
+          a band of its own behind a second rule. */}
       {question.allow_free_text ? (
-        <div className="mt-1.5">
+        <div className={question.options.length > 0 ? "" : "mt-1.5"}>
           {customSelected ? (
-            <div
-              className={
-                "flex items-start gap-3 rounded-xl border px-3 py-2 transition-colors " +
-                "border-[var(--primary)]/70 bg-[color-mix(in_srgb,var(--primary)_5%,var(--card))]"
-              }
-            >
-              <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--primary)] text-[12px] font-semibold text-[var(--primary-foreground)]">
-                {LETTERS[question.options.length] ?? "+"}
+            <div className="flex min-w-0 items-start gap-2.5 px-0 py-1">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--primary)] text-[var(--primary-foreground)]">
+                <Pencil size={13} strokeWidth={2} />
               </span>
               <textarea
                 ref={textareaRef}
                 value={customDraft}
                 onChange={(event) => onCustomTextChange(event.target.value)}
                 placeholder={question.placeholder ?? t("Type your reply…")}
-                rows={3}
+                rows={2}
                 disabled={locked}
-                className="min-h-[2.25rem] w-full resize-y bg-transparent text-[13.5px] leading-snug text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)]/80 disabled:opacity-60"
+                className="min-h-[1.5rem] w-full resize-y bg-transparent pt-0.5 text-[14px] leading-snug text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)]/80 disabled:opacity-60"
               />
             </div>
           ) : (
@@ -1337,15 +1483,15 @@ const QuestionBody = memo(function QuestionBody({
               type="button"
               onClick={() => !locked && onSelectCustom()}
               disabled={locked}
-              className="flex w-full items-center gap-3 rounded-xl border border-dashed border-[var(--border)] bg-transparent px-3 py-2 text-left text-[13px] text-[var(--muted-foreground)] transition-colors hover:border-[var(--foreground)]/30 hover:bg-[color-mix(in_srgb,var(--foreground)_3%,transparent)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+              className="group -mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-2.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_3.5%,transparent)] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--muted)]/70 text-[12px] font-semibold text-[var(--muted-foreground)]">
-                {LETTERS[question.options.length] ?? "+"}
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] text-[var(--muted-foreground)] group-hover:text-[var(--foreground)]">
+                <Pencil size={13} strokeWidth={2} />
               </span>
-              <span className="truncate">
+              <span className="truncate text-[14px] text-[var(--muted-foreground)] group-hover:text-[var(--foreground)]">
                 {customDraft.trim()
                   ? t("Other: {{text}}", { text: customDraft.trim() })
-                  : t("Other — write your own reply…")}
+                  : t("Something else…")}
               </span>
             </button>
           )}
@@ -1393,59 +1539,58 @@ const ResolvedAskUserCard = memo(function ResolvedAskUserCard({
     return n;
   }, [payload.questions, byId]);
 
-  // Match the look-and-feel of ``ResearchOutlineEditor`` so the two
-  // collapsible cards stack consistently in the merged research bubble.
+  // Same shell as the question it replaces (see ``AskUserOptions``): the
+  // prompt drops to muted, the answer holds the foreground, and nothing else
+  // is added — an answered exchange is history, not a panel. ``collapsible``
+  // is research's alone: it needs the bubble back for the outline editor, so
+  // there the card keeps a header row to fold from.
   return (
-    <div className="my-2 rounded-lg border border-[var(--border)]/30 bg-[var(--background)] shadow-sm">
-      <button
-        type="button"
-        disabled={!collapsible}
-        onClick={collapsible ? toggleCollapsed : undefined}
-        className={`block w-full text-left ${collapsed ? "" : "border-b border-[var(--border)]/20"} px-4 py-2 ${
-          collapsible
-            ? "cursor-pointer transition-colors hover:bg-[var(--muted-foreground)]/[0.025]"
-            : "cursor-default"
-        }`}
-      >
-        <div className="flex items-center gap-1.5">
-          {collapsible && (
-            <ChevronDown
-              size={12}
-              className={`shrink-0 text-[var(--muted-foreground)]/50 transition-transform ${
-                collapsed ? "-rotate-90" : ""
-              }`}
-            />
-          )}
-          <h3 className="text-[13px] font-semibold text-[var(--foreground)]">
+    <div
+      data-testid="ask-user-answers"
+      className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3.5 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.04)]"
+    >
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          aria-expanded={!collapsed}
+          className={`-mx-1.5 flex w-[calc(100%+0.75rem)] items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_3.5%,transparent)] ${
+            collapsed ? "" : "mb-2"
+          }`}
+        >
+          <ChevronDown
+            size={12}
+            className={`shrink-0 text-[var(--muted-foreground)]/50 transition-transform ${
+              collapsed ? "-rotate-90" : ""
+            }`}
+          />
+          <span className="text-[12.5px] font-medium text-[var(--muted-foreground)]">
             {t("Your answers")}
-          </h3>
-          {collapsible && collapsed && (
+          </span>
+          {collapsed && (
             <span className="text-[11px] text-[var(--muted-foreground)]/45">
               · {answeredCount}/{payload.questions.length} {t("answered")}
             </span>
           )}
-        </div>
-      </button>
+        </button>
+      ) : null}
       {!collapsed && (
-        <div className="space-y-0 divide-y divide-[var(--border)]/15">
-          {payload.questions.map((q, index) => {
+        <div className="space-y-2">
+          {payload.questions.map((q) => {
             const value = (byId.get(q.id) ?? "").trim();
             return (
-              <div key={q.id} className="flex items-start gap-2 px-3 py-1.5">
-                <span className="mt-[3px] w-4 shrink-0 text-center text-[11px] font-medium tabular-nums leading-tight text-[var(--muted-foreground)]/30">
-                  {index + 1}
-                </span>
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  <div className="text-[12px] font-medium leading-snug text-[var(--foreground)]">
-                    {q.prompt}
-                  </div>
-                  <div className="text-[11px] leading-snug text-[var(--muted-foreground)]/70">
-                    {value ? (
-                      value
-                    ) : (
-                      <span className="italic">{t("(skipped)")}</span>
-                    )}
-                  </div>
+              <div key={q.id} className="space-y-0.5">
+                <div className="text-[12.5px] leading-snug text-[var(--muted-foreground)]">
+                  <InlineMarkdown content={q.prompt} />
+                </div>
+                <div className="text-[14px] font-medium leading-snug text-[var(--foreground)]">
+                  {value ? (
+                    <InlineMarkdown content={value} />
+                  ) : (
+                    <span className="font-normal italic text-[var(--muted-foreground)]/70">
+                      {t("(skipped)")}
+                    </span>
+                  )}
                 </div>
               </div>
             );

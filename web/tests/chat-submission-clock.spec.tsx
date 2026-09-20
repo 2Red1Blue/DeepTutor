@@ -9,14 +9,16 @@ import { initI18n } from "@/i18n/init";
 
 initI18n("en");
 const transport = vi.hoisted(() => ({
+  close: undefined as undefined | (() => void),
   emit: undefined as
     undefined | ((event: Record<string, unknown>) => void),
 }));
 vi.mock("@/features/chat/transport/UnifiedTurnClient", () => ({
   UnifiedTurnClient: class {
     connected = true;
-    constructor(emit: typeof transport.emit) {
+    constructor(emit: typeof transport.emit, close: () => void) {
       transport.emit = emit;
+      transport.close = close;
     }
     connect() {}
     disconnect() {}
@@ -25,13 +27,15 @@ vi.mock("@/features/chat/transport/UnifiedTurnClient", () => ({
   },
 }));
 function Harness() {
-  const { state, sendMessage, regenerateLastMessage } =
+  const { state, sendMessage, regenerateLastMessage, cancelStreamingTurn } =
     useChatStateAdapter();
   const message = state.messages.at(-1);
   return (
     <>
       <button onClick={() => sendMessage("Hello")}>Send</button>
       <button onClick={() => regenerateLastMessage()}>Retry</button>
+      <button onClick={cancelStreamingTurn}>Stop</button>
+      <div data-testid="events">{JSON.stringify(message?.events ?? [])}</div>
       {message?.role === "assistant" && (
         <StreamingStatus
           events={message.events ?? []}
@@ -99,4 +103,18 @@ it("counts submission latency before the first frame, preserves it on completion
   expect(screen.getByRole("status")).toHaveTextContent("2m 1s");
   fireEvent.click(screen.getByText("Retry"));
   expect(screen.getByRole("status")).toHaveTextContent("0s");
+});
+
+it("keeps a stopped marker when cancelled before the first server event", () => {
+  render(<ChatStateAdapterProvider><Harness /></ChatStateAdapterProvider>);
+  fireEvent.click(screen.getByText("Send"));
+  fireEvent.click(screen.getByText("Stop"));
+  expect(screen.getByTestId("events")).toHaveTextContent('"status":"cancelled"');
+});
+
+it("retains the connection error in the reply after transport closes", () => {
+  render(<ChatStateAdapterProvider><Harness /></ChatStateAdapterProvider>);
+  fireEvent.click(screen.getByText("Send"));
+  act(() => transport.close?.());
+  expect(screen.getByTestId("events")).toHaveTextContent("Connection lost while generating. Please retry your message.");
 });

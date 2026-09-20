@@ -369,7 +369,7 @@ def _record_question_id(question: str) -> str:
     (the store dedups on ``session_id + turn_id + question_id``) instead of
     piling up duplicates each time the learner revisits it."""
     normalized = " ".join(question.split()).casefold()
-    return "pq_" + hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:16]
+    return "pq_" + hashlib.sha1(normalized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 def _partner_record_session() -> tuple[str, str]:

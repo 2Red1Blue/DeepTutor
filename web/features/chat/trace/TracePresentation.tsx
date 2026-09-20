@@ -1039,7 +1039,12 @@ function TraceRowItem({
   // briefing runs long enough to walk the trace up the viewport while the
   // page is pinned to the bottom.
   const isContextExploration = kind === "context_exploration";
-  const autoOpen = isThinking && !isContextExploration ? active : false;
+  const answering =
+    isChatRound &&
+    !retracted &&
+    callEvents.some(isChatLoopAnswerContent);
+  const autoOpen =
+    isThinking && !isContextExploration && !answering ? active : false;
   const open = expandable && (userOpen ?? autoOpen);
   // Every row with detail is clickable now, deliberation included — it has to
   // be, since a settled round folds itself and the text has to be reachable.
@@ -1098,9 +1103,10 @@ function TraceRowItem({
         callEvents.map((e) => getTraceMeta(e).subagent_name).find(Boolean) ||
           "",
       );
-      headline = agentName
-        ? `${t("Consult Subagent")} ${agentName}`
-        : t("Consult Subagent");
+      const kind = callEvents.map((event) => getTraceMeta(event).subagent_kind).find(Boolean);
+      const action = kind === "partner_group" ? t("Organize partner discussion")
+        : kind === "partner" ? t("Ask partner") : t("Ask subagent");
+      headline = agentName ? `${action} ${agentName}` : action;
     }
   } else if (isRetrieve) {
     headline = engine ? `${providerLabel(engine)} ${header}` : header;

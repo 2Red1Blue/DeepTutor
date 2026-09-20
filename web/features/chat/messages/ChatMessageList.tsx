@@ -1,6 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { UsageFooter } from "./UsageFooter";
+import { cumulativeMessageUsage, messageUsage } from "./usage-summary";
 import {
   memo,
   useCallback,
@@ -19,7 +21,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardList,
-  Coins,
   Copy,
   AlertCircle,
   Database,
@@ -29,6 +30,7 @@ import {
   RefreshCcw,
   Square,
   UserRound,
+  UsersRound,
   Volume2,
   X,
   Trash2,
@@ -103,6 +105,7 @@ import {
 import { hasSettledFinalRound } from "@/features/chat/trace/selectors";
 import type { MessageTraceMetadata } from "@/features/chat/trace/memory";
 import { agentGlyph } from "@/components/agents/agent-icons";
+import { useConsultationReference } from "@/hooks/useConsultationReference";
 import { useConnectedAgentKinds } from "@/hooks/useConnectedAgentKinds";
 import {
   authoritativeResearchReport,
@@ -193,13 +196,15 @@ function processContentKey(
 ): string {
   return segments
     .map((seg) =>
-      settled
-        ? seg.key
-        : seg.kind === "text"
-          ? `t${seg.key}:${seg.text.length}`
-          : seg.kind === "trace"
-            ? `r${seg.key}:${seg.events.length}`
-            : seg.key,
+      seg.kind === "ask_user"
+        ? `q${seg.key}:${JSON.stringify(seg.data)}`
+        : settled
+          ? seg.key
+          : seg.kind === "text"
+            ? `t${seg.key}:${seg.text.length}`
+            : seg.kind === "trace"
+              ? `r${seg.key}:${seg.events.length}`
+              : seg.key,
     )
     .join("|");
 }
@@ -254,7 +259,7 @@ const ProcessBody = memo(
   }) {
     return (
       <div
-        className="flex flex-col gap-3 border-l border-[var(--border)]"
+        className="flex flex-col gap-3"
         // The padding is the content edge — where prose starts and where a
         // row's text is pulled back to. Wide enough to hold the dots.
         style={{ paddingLeft: ROW_GUTTER }}
@@ -279,6 +284,12 @@ const ProcessBody = memo(
             >
               <TraceFlow events={seg.events} isStreaming={isStreaming} />
             </div>
+          ) : seg.kind === "ask_user" && seg.data.resolved ? (
+            <AskUserOptions
+              key={seg.key}
+              data={seg.data}
+              onSubmit={() => false}
+            />
           ) : null,
         )}
       </div>
@@ -354,14 +365,28 @@ type MessageBlock =
 /**
  * Split a message into its blocks.
  *
- * Everything before ``answerStart`` is working-out, broken at each card: a
- * question the reader was asked is part of the exchange, so it keeps its place
- * even when the work around it is folded.
+ * A mastery question ends its turn, so the prose introducing it is teaching,
+ * not commentary awaiting a later answer. Keep that text outside the fold as
+ * well as the card. Earlier exploration and any intervening tool rows still
+ * fold normally. Answered clarifications belong to the same process as the
+ * work before and after them; only pending cards stand outside the fold.
  */
 function buildMessageBlocks(
   segments: MessageSegment[],
   answerStart: number,
 ): MessageBlock[] {
+  const teaching = new Set<number>();
+  segments.forEach((segment, index) => {
+    if (segment.kind !== "mastery_question") return;
+    let before = index - 1;
+    // Recording a grade or updating state can share the round with the quiz.
+    // Those rows do not turn the preceding teaching into working notes.
+    while (before >= 0 && segments[before].kind === "trace") before -= 1;
+    while (before >= 0 && segments[before].kind === "text") {
+      teaching.add(before);
+      before -= 1;
+    }
+  });
   const blocks: MessageBlock[] = [];
   let run: MessageSegment[] = [];
   const flush = () => {
@@ -369,10 +394,18 @@ function buildMessageBlocks(
     blocks.push({ kind: "process", key: `p-${run[0].key}`, segments: run });
     run = [];
   };
-  segments.slice(0, answerStart).forEach((segment) => {
-    if (segment.kind === "ask_user" || segment.kind === "mastery_question") {
+  segments.slice(0, answerStart).forEach((segment, index) => {
+    if (
+      (segment.kind === "ask_user" && !segment.data.resolved) ||
+      segment.kind === "mastery_question"
+    ) {
       flush();
       blocks.push({ kind: "card", key: segment.key, segment });
+      return;
+    }
+    if (teaching.has(index)) {
+      flush();
+      blocks.push({ kind: "answer", key: segment.key, segment });
       return;
     }
     run.push(segment);
@@ -876,6 +909,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   // The boundary is the trailing run of prose — the text after the last step —
   // and it is structural, not timed: whatever is being written right now is
   // always placed as the answer, from its first character.
+  // Teaching before a mastery question is also answer prose; the block
+  // builder preserves it separately because that card ends the turn.
   //
   // Waiting for the terminal round before promoting it is what an earlier cut
   // did, and it meant the closing answer streamed INSIDE the collapsible
@@ -903,9 +938,9 @@ export const AssistantMessage = memo(function AssistantMessage({
   // one thing that does need the terminal-round signal, since it is the claim
   // that there is no more work coming at all.
   const settledIntoAnswer = !isStreaming || hasSettledFinalRound(events);
-  // Cards are not process: a question the reader was asked (and answered) is
-  // part of the exchange, not working-out to be folded away. So they break
-  // the process into runs, each of which folds on its own.
+  // Pending questions stay outside the disclosure so they remain answerable.
+  // Once answered, a clarification joins the surrounding process so resumed
+  // work continues under the original activity header.
   const messageBlocks = useMemo(
     () => buildMessageBlocks(messageSegments, answerStart),
     [messageSegments, answerStart],
@@ -1072,8 +1107,8 @@ export const AssistantMessage = memo(function AssistantMessage({
       ) : useSegmentLayout ? (
         // Default chat surface. The working-out (prose interleaved with the
         // steps it introduced) is one layer, folded once the turn settles; the
-        // closing answer is the other and always stands plain. Cards sit
-        // between them at the point they were asked.
+        // closing answer is the other and always stands plain. Pending cards
+        // stay outside the process until the user answers them.
         bodyBlocks.map((block) =>
           block.kind === "process" ? (
             <ProcessFold
@@ -1144,40 +1179,6 @@ export const AssistantMessage = memo(function AssistantMessage({
 });
 
 AssistantMessage.displayName = "AssistantMessage";
-
-function CostFooter({
-  cost,
-  tokens,
-  calls,
-}: {
-  cost: number;
-  tokens: number;
-  calls: number;
-}) {
-  const { t } = useTranslation();
-  const formatCost = (usd: number) => {
-    if (usd < 0.01) return `$${usd.toFixed(4)}`;
-    return `$${usd.toFixed(2)}`;
-  };
-  const formatTokens = (n: number) => {
-    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-    return String(n);
-  };
-  return (
-    <div className="flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]/70">
-      <Coins size={11} strokeWidth={1.5} className="shrink-0" />
-      <span>{formatCost(cost)}</span>
-      <span className="opacity-50">·</span>
-      <span>
-        {formatTokens(tokens)} {t("tokens")}
-      </span>
-      <span className="opacity-50">·</span>
-      <span>
-        {calls} {t("calls")}
-      </span>
-    </div>
-  );
-}
 
 // Claude-style icon-only message action: a quiet 15px glyph with the label
 // in an instant tooltip, brightening on hover.
@@ -1527,6 +1528,7 @@ export const UserMessage = memo(function UserMessage({
   onSwitchBranch,
   availableKbNames,
   showModeBadge,
+  onOpenConsultation,
 }: {
   msg: ChatMessageItem;
   index: number;
@@ -1541,6 +1543,7 @@ export const UserMessage = memo(function UserMessage({
   /** Label the bubble with its capability. A single-capability surface
    *  already names the mode in its own chrome. */
   showModeBadge?: boolean;
+  onOpenConsultation?: () => void;
 }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
@@ -1551,6 +1554,7 @@ export const UserMessage = memo(function UserMessage({
   // agents, not KBs — this maps a selected name to its backend kind so the
   // reference chip can badge it with the agent's brand icon.
   const agentKinds = useConnectedAgentKinds();
+  const consultation = useConsultationReference(msg.requestSnapshot?.config);
   if (msg.content.startsWith("[Quiz Performance]")) return null;
   // ``msg.id`` can be a negative client-side sentinel for optimistic
   // (just-sent, not yet reconciled with the server) rows. We still allow
@@ -1584,6 +1588,13 @@ export const UserMessage = memo(function UserMessage({
   // the bubble (the sent-message mirror of the composer's tree).
   const snap = msg.requestSnapshot;
   const refTreeItems: ContextTreeItem[] = [
+    ...(consultation ? [{
+      key: `${consultation.kind}-${consultation.id}`,
+      icon: consultation.kind === "partner_group" ? UsersRound : UserRound,
+      kind: t(consultation.kind === "partner_group" ? "Organize partner discussion" : "Ask partner"),
+      label: consultation.name,
+      onClick: onOpenConsultation,
+    }] : []),
     ...(msg.attachments ?? []).map((a, ai): ContextTreeItem => {
       const filename = a.filename || t("Attachment");
       const spec = docIconFor(filename);
@@ -1610,8 +1621,9 @@ export const UserMessage = memo(function UserMessage({
             // Brand SVG marks share the lucide call signature (size/strokeWidth/
             // className); cast bridges the structural-variance gap.
             icon: (agentGlyph(agentKind) ?? Bot) as unknown as LucideIcon,
-            kind: t("Agent"),
+            kind: t("Ask subagent"),
             label: name,
+            onClick: onOpenConsultation,
           };
         }
         return {
@@ -1805,6 +1817,7 @@ export const ChatMessageList = memo(function ChatMessageList({
   onRegenerateMessage,
   onConfirmOutline,
   onPreviewAttachment,
+  onOpenConsultation,
   onDeleteTurn,
   selectedBranches,
   onEditMessage,
@@ -1830,6 +1843,7 @@ export const ChatMessageList = memo(function ChatMessageList({
     requestSnapshot?: MessageRequestSnapshot | null,
   ) => void;
   onPreviewAttachment?: (attachment: MessageAttachment) => void;
+  onOpenConsultation?: (events: StreamEvent[]) => void;
   onDeleteTurn?: (messageId: number) => void;
   /** Edit-branching: selected sibling at each branch point. */
   selectedBranches?: Record<string, number>;
@@ -2033,6 +2047,11 @@ export const ChatMessageList = memo(function ChatMessageList({
       });
   }, [visibleMessages, deepResearchMergeMap]);
 
+  const usageByRow = useMemo(() => {
+    const totals = cumulativeMessageUsage(messageRows.map(row => row.msg));
+    return new Map(messageRows.map((row, index) => [row.originalIndex, totals[index]]));
+  }, [messageRows]);
+
   const lastRenderedAssistantIndex = useMemo(() => {
     for (let idx = messageRows.length - 1; idx >= 0; idx -= 1) {
       if (messageRows[idx].msg.role === "assistant")
@@ -2065,11 +2084,15 @@ export const ChatMessageList = memo(function ChatMessageList({
 
   return (
     <>
-      {messageRows.map(({ msg, originalIndex, pairedUserMessage }) => {
+      {messageRows.map(({ msg, originalIndex, pairedUserMessage }, rowIndex) => {
         const i = originalIndex;
         if (msg.role === "user") {
           const sib =
             msg.id !== undefined ? siblingsByMessageId.get(msg.id) : undefined;
+          const reply = messageRows[rowIndex + 1]?.msg;
+          const consultationEvents = reply?.role === "assistant"
+            ? (reply.events ?? []).filter(event => event.metadata?.trace_kind === "subagent_event")
+            : [];
           return (
             <div
               key={`${msg.role}-${i}`}
@@ -2088,6 +2111,9 @@ export const ChatMessageList = memo(function ChatMessageList({
                 onSwitchBranch={onSwitchBranch}
                 availableKbNames={availableKbNames}
                 showModeBadge={showModeBadge}
+                onOpenConsultation={consultationEvents.length && onOpenConsultation
+                  ? () => onOpenConsultation(consultationEvents)
+                  : undefined}
               />
             </div>
           );
@@ -2097,14 +2123,17 @@ export const ChatMessageList = memo(function ChatMessageList({
           isStreaming && i === lastRenderedAssistantIndex;
         const msgDone = !isActiveAssistant;
         const showActions = msgDone && hasVisibleMarkdownContent(msg.content);
-        const terminalError = (msg.events ?? []).find(
-          (e) =>
-            e.type === "error" &&
-            Boolean(
-              (e.metadata as { turn_terminal?: boolean } | undefined)
-                ?.turn_terminal,
-            ),
-        );
+        const events = msg.events ?? [];
+        const terminalError = [...events].reverse().find(
+          (event) => event.type === "error" && Boolean(event.metadata?.turn_terminal),
+        ) ?? (!hasVisibleMarkdownContent(msg.content)
+          ? [...events].reverse().find((event) => event.type === "error")
+          : undefined);
+        const stopped = terminalError?.metadata?.status === "cancelled" ||
+          events.some((event) => event.type === "done" && event.metadata?.status === "cancelled");
+        const emptyResponse = !hasVisibleMarkdownContent(msg.content) &&
+          !msg.attachments?.length &&
+          !events.some((event) => ["result", "tool_call", "tool_result", "wait_for_input"].includes(event.type));
         const terminalErrorRetryable = Boolean(
           (terminalError?.metadata as { retryable?: boolean } | undefined)
             ?.retryable,
@@ -2123,22 +2152,7 @@ export const ChatMessageList = memo(function ChatMessageList({
             : null;
         const showDelete = deletableTurnUserId != null;
 
-        const costSummary = (() => {
-          if (!msgDone) return null;
-          const resultEv = msg.events?.find((e) => e.type === "result");
-          if (!resultEv) return null;
-          const meta = resultEv.metadata?.metadata as
-            Record<string, unknown> | undefined;
-          const cs = meta?.cost_summary as
-            | {
-                total_cost_usd?: number;
-                total_tokens?: number;
-                total_calls?: number;
-              }
-            | undefined;
-          if (!cs || !cs.total_calls) return null;
-          return cs;
-        })();
+        const costSummary = msgDone ? messageUsage(msg.events) : null;
 
         return (
           <div
@@ -2180,12 +2194,20 @@ export const ChatMessageList = memo(function ChatMessageList({
               // with a turn_terminal error event. Surface it as an error
               // card with an inline retry instead of leaving a bare trace.
               if (isActiveAssistant) return null;
-              if (!terminalError) return null;
+              if (stopped) return (
+                <div role="status" className="mt-3 flex items-center gap-2 text-sm text-[var(--muted-foreground)]">
+                  <Square className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>{t("Stopped")}</span>
+                </div>
+              );
+              if (!terminalError && !emptyResponse) return null;
               return (
-                <div className="mt-3 flex w-full max-w-[min(520px,90%)] items-center gap-2 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-3 py-2">
+                <div role="alert" className="mt-3 flex w-full max-w-[min(520px,90%)] items-center gap-2 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-3 py-2">
                   <AlertCircle className="h-4 w-4 shrink-0 text-[var(--destructive)]" />
                   <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-[var(--foreground)]">
-                    {terminalError.content || t("The turn was interrupted.")}
+                    {terminalError?.content || (terminalError
+                      ? t("The turn was interrupted.")
+                      : t("No response was generated. Please try again."))}
                   </span>
                   {showRegenerate ? (
                     <button
@@ -2234,11 +2256,7 @@ export const ChatMessageList = memo(function ChatMessageList({
                 )}
                 {costSummary && (
                   <div className="ml-auto">
-                    <CostFooter
-                      cost={costSummary.total_cost_usd ?? 0}
-                      tokens={costSummary.total_tokens ?? 0}
-                      calls={costSummary.total_calls ?? 0}
-                    />
+                    <UsageFooter turn={costSummary} session={usageByRow.get(i) ?? costSummary} />
                   </div>
                 )}
               </div>

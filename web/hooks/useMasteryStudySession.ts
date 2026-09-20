@@ -1,5 +1,7 @@
 "use client";
 
+import { masterySessionRoute as existingMasterySessionRoute } from "@/lib/learning-routes";
+
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -247,13 +249,10 @@ export function useMasteryStudySession(
       })
     )
       return;
-    const courseQuery = courseId
-      ? `?course=${encodeURIComponent(courseId)}`
-      : "";
+    const destination = new URL(existingMasterySessionRoute(pathId, newSessionId), window.location.origin);
+    if (courseId) destination.searchParams.set("course", courseId);
     router.replace(
-      `/mastery/${encodeURIComponent(pathId)}/sessions/${encodeURIComponent(
-        newSessionId,
-      )}${courseQuery}`,
+      `${destination.pathname}${destination.search}`,
       { scroll: false },
     );
   }, [

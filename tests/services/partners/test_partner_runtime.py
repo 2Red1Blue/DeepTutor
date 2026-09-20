@@ -43,6 +43,40 @@ def _muted_progress_config() -> PartnerConfig:
 
 class TestTurnExecution:
     @pytest.mark.asyncio
+    async def test_model_history_and_request_header_survive_partner_turns(
+        self, partners_root, fake_orchestrator, monkeypatch
+    ):
+        from tests.services.session.test_model_history import turn_record
+
+        record = turn_record()
+        record["route"] = {"provider": "openai", "model": "test-model"}
+        original = fake_orchestrator.handle
+
+        async def handle(instance, context):
+            context.runtime.model_turn = record
+            async for item in original(instance, context):
+                yield item
+
+        monkeypatch.setattr(fake_orchestrator, "handle", handle)
+        fake_orchestrator.script = finish("Displayed answer")
+        runner = _runner(partners_root)
+        await runner.process_message(_msg("Question"))
+        await runner.process_message(_msg("Follow up"))
+
+        restored = fake_orchestrator.seen_contexts[-1].runtime
+        assert restored.model_history == record["messages"]
+        assert restored.previous_model_turn == record
+        public_rows = _shared_store().messages("telegram:42")
+        assert all("model_turn" not in row.get("metadata", {}) for row in public_rows)
+        custom = runner._build_context(
+            _msg(),
+            store=_shared_store(),
+            options=PartnerTurnOptions(conversation_history=[]),
+        )
+        assert custom.runtime.model_history is None
+        assert custom.runtime.previous_model_turn is None
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("channel", ["weixin", "telegram"])
     async def test_all_im_channels_mirror_user_trace_and_answer_to_web_activity(
         self, partners_root, fake_orchestrator, channel
@@ -453,10 +487,12 @@ class TestTurnExecution:
         attempted: list[Any] = []
 
         def _activate(selection):
+            from types import SimpleNamespace
+
             attempted.append(selection)
             if selection == primary:
                 raise LLMConfigError("primary profile is gone")
-            return (None, None)
+            return (SimpleNamespace(binding="openai", model="test-model"), None)
 
         monkeypatch.setattr(selection_runtime, "activate_llm_selection", _activate)
         fake_orchestrator.script = finish("backup answer")

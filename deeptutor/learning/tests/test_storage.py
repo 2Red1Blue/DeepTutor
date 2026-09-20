@@ -124,6 +124,25 @@ class TestSaveLoad:
                 == 2
             )
 
+    def test_existing_paths_receive_evidence_projection_on_upgrade(self, store):
+        from deeptutor.learning.models import LearningEvidence
+
+        progress = LearningProgress(book_id="legacy-evidence")
+        progress.learning_evidence = [
+            LearningEvidence(knowledge_point_id="kp1", result="incorrect", quality=0.0)
+        ]
+        store.save(progress)
+        before = store.load("legacy-evidence")
+        with sqlite3.connect(store.db_path) as conn:
+            conn.execute("DELETE FROM mastery_learning_evidence")
+            conn.execute(
+                "DELETE FROM mastery_schema_migrations WHERE name='learning_evidence_projection_v1'"
+            )
+        _initialized_db_paths.discard(store.db_path.resolve())
+        upgraded = LearningStore(root=store.db_path.parent)
+        assert upgraded.count_learning_evidence("legacy-evidence") == 1
+        assert upgraded.load("legacy-evidence").model_dump() == before.model_dump()
+
     def test_legacy_json_without_retention_fields_imports(self, store, tmp_path):
         legacy_path = tmp_path / "old-srs.json"
         legacy_path.write_text(

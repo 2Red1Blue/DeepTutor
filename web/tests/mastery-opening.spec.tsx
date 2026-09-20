@@ -171,7 +171,7 @@ describe("mastery opening binding", () => {
     );
     await waitFor(() =>
       expect(mocks.replace).toHaveBeenCalledWith(
-        "/mastery/topic_created/sessions/unified_bound",
+        "/learning/mastery/topic_created/sessions/unified_bound",
         {
           scroll: false,
         },

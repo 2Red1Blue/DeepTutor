@@ -141,7 +141,8 @@ def test_upsert_entry_persists_base64_answer_image(
     assert response.json()["user_answer_images"] == [
         {
             "id": "answer-image-1",
-            "url": (f"/files/attachments/{session['id']}/answer-image-1/answer.png"),
+            # Pinned to the originating data scope; default workspace = empty id.
+            "url": (f"/files/attachments/{session['id']}/answer-image-1/answer.png?dt_workspace="),
             "filename": "answer.png",
             "mime_type": "image/png",
         }

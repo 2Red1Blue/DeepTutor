@@ -437,6 +437,12 @@ export function useGroupSession(group: PartnerGroup, sessionKey: string) {
     }));
   }, [group.member_ids, live, messages, stoppedTurns]);
 
+  const reportConsultationActivity = useCallback((hasDraft: boolean, active: boolean) => {
+    socketRef.current?.send(JSON.stringify({
+      action: "consultation_activity", session_key: sessionKey, has_draft: hasDraft, active,
+    }));
+  }, [sessionKey]);
+
   const send = useCallback(
     (content: string, mentions: string[] | null) => {
       const socket = socketRef.current;
@@ -550,6 +556,7 @@ export function useGroupSession(group: PartnerGroup, sessionKey: string) {
 
   return {
     rounds,
+    reportConsultationActivity,
     running: Boolean(live),
     progress,
     connected,

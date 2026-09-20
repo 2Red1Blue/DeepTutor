@@ -152,7 +152,7 @@ class AssessmentRecord(BaseModel):
     @classmethod
     def _attempt_count(cls, value: object) -> int:
         try:
-            return max(1, int(value))  # type: ignore[arg-type]
+            return max(1, int(value))  # type: ignore[arg-type,call-overload]
         except (TypeError, ValueError):
             return 1
 
@@ -160,7 +160,7 @@ class AssessmentRecord(BaseModel):
     @classmethod
     def _hints_used(cls, value: object) -> int:
         try:
-            return max(0, int(value))  # type: ignore[arg-type]
+            return max(0, int(value))  # type: ignore[arg-type,call-overload]
         except (TypeError, ValueError):
             return 0
 
@@ -176,7 +176,7 @@ class AssessmentRecord(BaseModel):
     def assessment_id(self) -> str:
         """Audit id derived from the notebook unique key — not a second identity."""
         raw = f"{self.session_id}|{self.turn_id}|{self.question_id}"
-        return sha1(raw.encode("utf-8")).hexdigest()
+        return sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def _resolve_result(record: AssessmentRecord, diagnostics: list[str]) -> AssessmentResult:

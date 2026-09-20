@@ -803,6 +803,12 @@ def _request_snapshot_metadata(
         "knowledgeBases": _string_list(payload.get("knowledge_bases")),
         "language": str(payload.get("language", "en") or "en"),
     }
+    for payload_key, snapshot_key in (
+        ("consult_partner_id", "consultPartnerId"),
+        ("partner_discussion_group_id", "partnerDiscussionGroupId"),
+    ):
+        if payload_key in payload:
+            snapshot[snapshot_key] = payload[payload_key]
     workspace_mode = _workspace_mode(payload.get("workspace_mode"), capability=capability)
     if workspace_mode:
         snapshot["workspaceMode"] = workspace_mode

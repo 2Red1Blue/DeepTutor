@@ -1,5 +1,8 @@
 "use client";
 
+import { scopedUrl } from "@/lib/workspace-scope";
+import { MASTERY_HOME, masterySessionsRoute, masteryTopicRoute } from "@/lib/learning-routes";
+
 import { browserStorage } from "@/shared/storage";
 
 import dynamic from "next/dynamic";
@@ -534,7 +537,7 @@ export function MasteryStudy({
           {topicError}
         </p>
         <Link
-          href="/mastery"
+          href={scopedUrl(MASTERY_HOME)}
           className="mt-5 text-sm font-medium text-[var(--primary)] hover:underline"
         >
           {t("Back to topics")}
@@ -556,7 +559,7 @@ export function MasteryStudy({
           right saying the same thing twice. */}
       <header className="flex h-[56px] shrink-0 items-center gap-1 border-b border-[var(--border)] bg-[var(--background)]/95 px-3 backdrop-blur sm:px-4">
         <Link
-          href={`/mastery/${encodeURIComponent(pathId)}`}
+          href={masteryTopicRoute(pathId)}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]/60 hover:text-[var(--foreground)]"
           title={t("Learning topics")}
           aria-label={t("Learning topics")}
@@ -695,7 +698,7 @@ export function MasteryStudy({
                       {sessionError}
                     </p>
                     <Link
-                      href={`/mastery/${encodeURIComponent(pathId)}/sessions`}
+                      href={masterySessionsRoute(pathId)}
                       className="mt-4 inline-flex rounded-xl bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)]"
                     >
                       {t("Start a new session")}

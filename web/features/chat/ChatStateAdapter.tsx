@@ -1,5 +1,7 @@
 "use client";
 
+import { activeWorkspaceId } from "@/lib/workspace-scope";
+
 import React, {
   createContext,
   useCallback,
@@ -132,6 +134,18 @@ export interface SendMessageOptions {
   masterySkip?: { question_id: string } | null;
 }
 
+/** Per-conversation narrowing of the workspace's skill and MCP selections.
+ *  Both lists are intersected with what the workspace allows, never added to
+ *  it, so a conversation can only ever reach less than its workspace. */
+export interface ResourceSelection {
+  skills: string[];
+  mcp: string[];
+}
+
+export function emptyResourceSelection(): ResourceSelection {
+  return { skills: [], mcp: [] };
+}
+
 export interface ChatState {
   /** Local identity, available before the backend assigns a session ID. */
   sessionKey: string;
@@ -154,10 +168,15 @@ export interface ChatState {
   /** Study course this conversation belongs to; "" = unclassified.
    *  Read by the composer's course pill and sent with every turn, so Course
    *  Study senses the same course the learner can see it is bound to. */
+  workspaceId: string | null;
   courseId: string;
   /** Session-level persona preference; "" = Default (no persona). Applies
    *  to every following message until changed (persisted on the session). */
   personaSelection: string;
+  /** Skills and MCP servers this conversation narrowed itself to. Empty means
+   *  inherit — everything the workspace allows — which is what a conversation
+   *  that never opened the pickers keeps sending. */
+  resourceSelection: ResourceSelection;
   messages: MessageItem[];
   isStreaming: boolean;
   currentStage: string;
@@ -174,6 +193,7 @@ export interface SessionConfiguration {
   knowledgeBases?: string[];
   masteryPathId?: string | null;
   masterySessionMode?: string | null;
+  workspaceId?: string | null;
   courseId?: string;
   enabledTools?: string[];
 }
@@ -214,6 +234,7 @@ export interface MessageAttachment {
 }
 
 export interface MessageRequestSnapshot {
+  resourceSelection?: ResourceSelection;
   content: string;
   capability?: string | null;
   workspaceMode?: WorkspaceMode | null;
@@ -290,8 +311,10 @@ interface SessionSnapshot {
   llmSelection?: LLMSelection | null;
   masteryPathId?: string | null;
   masterySessionMode?: string | null;
+  workspaceId?: string | null;
   courseId?: string;
   personaSelection?: string;
+  resourceSelection?: ResourceSelection;
   language?: string;
   selectedBranches?: Record<string, number>;
 }
@@ -308,6 +331,7 @@ type Action =
   | { type: "SET_MASTERY_SESSION_MODE"; mode: string | null; key?: string }
   | { type: "SET_COURSE_ID"; courseId: string }
   | { type: "SET_PERSONA_SELECTION"; persona: string }
+  | { type: "SET_RESOURCE_SELECTION"; selection: ResourceSelection }
   | { type: "SET_LANGUAGE"; lang: string }
   | {
       type: "ADD_USER_MSG";
@@ -327,6 +351,7 @@ type Action =
       type: "STREAM_END";
       key: string;
       status?: SessionRuntimeStatus;
+      errorMessage?: string;
       turnId?: string | null;
     }
   | {
@@ -400,8 +425,10 @@ function createSessionEntry(
     llmSelection: null,
     masteryPathId: null,
     masterySessionMode: null,
+    workspaceId: activeWorkspaceId() || null,
     courseId: "",
     personaSelection: "",
+    resourceSelection: emptyResourceSelection(),
     messages: [],
     isStreaming: false,
     currentStage: "",
@@ -470,6 +497,7 @@ function applySessionConfiguration(
       configuration.masterySessionMode !== undefined
         ? configuration.masterySessionMode
         : session.masterySessionMode,
+    workspaceId: configuration.workspaceId !== undefined ? configuration.workspaceId : session.workspaceId,
     courseId:
       configuration.courseId !== undefined
         ? configuration.courseId
@@ -582,6 +610,11 @@ function reducer(state: ProviderState, action: Action): ProviderState {
         ...session,
         personaSelection: action.persona,
       }));
+    case "SET_RESOURCE_SELECTION":
+      return updateSelectedSession(state, (session) => ({
+        ...session,
+        resourceSelection: action.selection,
+      }));
     case "SET_LANGUAGE":
       return updateSelectedSession(state, (session) => ({
         ...session,
@@ -687,6 +720,11 @@ function reducer(state: ProviderState, action: Action): ProviderState {
             ...session,
             isStreaming: true,
             status: "running",
+            // Sequence numbers belong to one turn, not the conversation.
+            // Reusing the previous turn's cursor when answering ask_user
+            // makes the transport drop the new turn's reply and done frames.
+            activeTurnId: null,
+            lastSeq: 0,
             messages: [
               ...existing,
               {
@@ -787,7 +825,11 @@ function reducer(state: ProviderState, action: Action): ProviderState {
                   ? ""
                   : session.currentStage,
             activeTurnId: action.event.turn_id || session.activeTurnId,
-            lastSeq: Math.max(session.lastSeq, action.event.seq || 0),
+            lastSeq:
+              action.event.turn_id &&
+              action.event.turn_id !== session.activeTurnId
+                ? action.event.seq || 0
+                : Math.max(session.lastSeq, action.event.seq || 0),
             updatedAt: Date.now(),
           },
         },
@@ -808,8 +850,22 @@ function reducer(state: ProviderState, action: Action): ProviderState {
           ending.isStreaming && last.trace?.started_at != null
             ? { ...last.trace, ended_at: Date.now() / 1000 }
             : last.trace;
-        if (repaired === last.content && trace === last.trace) return messages;
-        messages[messages.length - 1] = { ...last, content: repaired, trace };
+        let events = last.events ?? [];
+        if (
+          ["cancelled", "failed", "rejected"].includes(action.status ?? "") &&
+          !events.some((event) => event.type === "error" && event.metadata?.turn_terminal)
+        ) {
+          events = [...events, {
+            type: "error",
+            source: "transport",
+            stage: "",
+            content: action.errorMessage ?? [...events].reverse().find((event) => event.type === "error")?.content ?? "",
+            timestamp: Date.now() / 1000,
+            metadata: { turn_terminal: true, status: action.status, retryable: action.status !== "cancelled" },
+          }];
+        }
+        if (repaired === last.content && trace === last.trace && events === last.events) return messages;
+        messages[messages.length - 1] = { ...last, content: repaired, trace, events };
         return messages;
       })();
       const endedTurnId = action.turnId || ending?.activeTurnId || null;
@@ -853,6 +909,10 @@ function reducer(state: ProviderState, action: Action): ProviderState {
         sessionId: action.sessionId,
         sessionTitle: current.sessionTitle || existing?.sessionTitle || "",
         activeTurnId: action.turnId || current.activeTurnId,
+        lastSeq:
+          action.turnId && action.turnId !== current.activeTurnId
+            ? 0
+            : current.lastSeq,
         status: current.isStreaming ? "running" : current.status,
         updatedAt: Date.now(),
       };
@@ -926,6 +986,7 @@ function reducer(state: ProviderState, action: Action): ProviderState {
               action.masterySessionMode !== undefined
                 ? action.masterySessionMode
                 : existing.masterySessionMode,
+            workspaceId: action.workspaceId !== undefined ? action.workspaceId : existing.workspaceId,
             courseId:
               action.courseId !== undefined
                 ? action.courseId
@@ -934,10 +995,17 @@ function reducer(state: ProviderState, action: Action): ProviderState {
               action.personaSelection !== undefined
                 ? action.personaSelection
                 : existing.personaSelection,
+            resourceSelection:
+              action.resourceSelection !== undefined
+                ? action.resourceSelection
+                : existing.resourceSelection,
             messages: action.messages,
             isStreaming: (action.status || "idle") === "running",
             currentStage: "",
             activeTurnId: action.activeTurnId || null,
+            // Loaded messages contain only a trace preview. Replay the live
+            // turn from the start rather than trusting a cached cursor.
+            lastSeq: 0,
             status: action.status || "idle",
             language: action.language ?? existing.language,
             selectedBranches:
@@ -1207,6 +1275,7 @@ interface ChatContextValue {
   setMasterySessionMode: (mode: string | null) => void;
   setCourseId: (courseId: string) => void;
   setPersonaSelection: (persona: string) => void;
+  setResourceSelection: (selection: ResourceSelection) => void;
   setLanguage: (lang: string) => void;
   sendMessage: (
     content: string,
@@ -1400,7 +1469,11 @@ function hydrateRequestSnapshot(
     ...(attachments.length ? { attachments } : {}),
   };
 
-  const config = asRecord(stored.config);
+  const config = {
+    ...(asRecord(stored.config) ?? {}),
+    ...(typeof stored.consultPartnerId === "string" ? { consult_partner_id: stored.consultPartnerId } : {}),
+    ...(typeof stored.partnerDiscussionGroupId === "string" ? { partner_discussion_group_id: stored.partnerDiscussionGroupId } : {}),
+  };
   const notebookReferences = asNotebookReferences(stored.notebookReferences);
   const historyReferences = asStringArray(stored.historyReferences);
   const questionNotebookReferences = asQuestionReferences(
@@ -1463,6 +1536,7 @@ export function ChatStateAdapterProvider({
 }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const stateRef = useRef(initialState);
+  const runtimeGeneration = useRef(0);
   const runnersRef = useRef<
     Map<
       string,
@@ -1513,6 +1587,7 @@ export function ChatStateAdapterProvider({
 
   useEffect(
     () => () => {
+      runtimeGeneration.current += 1;
       runnersRef.current.forEach(({ client }) => client.disconnect());
       runnersRef.current.clear();
       retryTimersRef.current.forEach((id) => clearTimeout(id));
@@ -1809,6 +1884,7 @@ export function ChatStateAdapterProvider({
                 type: "STREAM_END",
                 key: record.key,
                 status: "failed",
+                errorMessage: i18n.t("Connection lost while generating. Please retry your message."),
               });
               // Surface the disconnect to the user. The WS client already
               // logs to console — we add a toast so non-debugging users
@@ -1844,11 +1920,14 @@ export function ChatStateAdapterProvider({
       options: { awaitAck?: boolean; attempt?: number } = {},
     ): Promise<boolean> {
       const attempt = options.attempt ?? 0;
+      if (attempt > 0 && !stateRef.current.sessions[key]?.isStreaming) {
+        return Promise.resolve(false);
+      }
       const runner = ensureRunner(key);
       if (!runner.client.connected) {
         if (attempt >= 10) {
           console.error("WebSocket failed to connect after retries");
-          dispatch({ type: "STREAM_END", key, status: "failed" });
+          dispatch({ type: "STREAM_END", key, status: "failed", errorMessage: i18n.t("Couldn't reach the server. Please check your connection and retry.") });
           // Surfaces the dead-after-N-retries case (different code path
           // from the close-while-streaming handler above). Same user
           // mental model, so same toast copy.
@@ -1943,6 +2022,7 @@ export function ChatStateAdapterProvider({
             afterSeq,
             controller.signal,
           );
+          if (controller.signal.aborted) return;
           events.push(...page.events);
           if (page.complete || page.next_seq == null) break;
           if (page.next_seq <= afterSeq) return;
@@ -2005,8 +2085,9 @@ export function ChatStateAdapterProvider({
       sessionId: string,
       options?: { signal?: AbortSignal; revalidate?: boolean },
     ) => {
+      const generation = runtimeGeneration.current;
       const session = await getSession(sessionId, options?.signal);
-      if (options?.signal?.aborted) return;
+      if (options?.signal?.aborted || generation !== runtimeGeneration.current) return;
       const key = session.session_id || session.id;
       const activeTurn = Array.isArray(session.active_turns)
         ? session.active_turns[0]
@@ -2080,6 +2161,7 @@ export function ChatStateAdapterProvider({
         // The server is the truth for which course a conversation belongs to:
         // it is set from the launch URL, from the composer's pill, and from the
         // sidebar's "move to course", and every one of those writes here.
+        workspaceId: session.preferences?.workspace_id || null,
         courseId:
           typeof session.preferences?.course_id === "string"
             ? session.preferences.course_id
@@ -2088,6 +2170,10 @@ export function ChatStateAdapterProvider({
           typeof session.preferences?.persona === "string"
             ? session.preferences.persona
             : "",
+        resourceSelection: {
+          skills: asStringArray(session.preferences?.skills),
+          mcp: asStringArray(session.preferences?.mcp),
+        },
         // Model output language is account-level state. Historical sessions
         // may have stale persisted preferences, so new turns follow the
         // current response-language setting rather than their original value.
@@ -2257,6 +2343,9 @@ export function ChatStateAdapterProvider({
       // Always a string — "" means Default / no persona.
       const effectivePersona =
         replaySnapshot?.persona ?? persona ?? session.personaSelection ?? "";
+      // Replays retain the original resource selection, including one-turn choices.
+      const effectiveResources =
+        replaySnapshot?.resourceSelection ?? session.resourceSelection ?? emptyResourceSelection();
       const effectiveMemoryReferences =
         replaySnapshot?.memoryReferences ?? memoryReferences;
       const effectiveBookReferences =
@@ -2302,6 +2391,7 @@ export function ChatStateAdapterProvider({
       const effectiveTimedMediaId =
         effectiveWatchingTurnFields.timed_media_id;
       const requestSnapshot: MessageRequestSnapshot = replaySnapshot ?? {
+        resourceSelection: {skills:[...effectiveResources.skills],mcp:[...effectiveResources.mcp]},
         content,
         capability: effectiveCapability,
         workspaceMode: effectiveWorkspaceMode,
@@ -2395,6 +2485,8 @@ export function ChatStateAdapterProvider({
         followup_question_context: followupQuestionContext,
         selection_tutor_context: selectionTutorContext,
         subagent_consult_budget: subagentConsultBudget,
+        consult_partner_id: consultPartnerId,
+        partner_discussion_group_id: partnerDiscussionGroupId,
         auto_route: autoRoute,
         ...finalTurnConfig
       } = effectiveConfig ?? {};
@@ -2411,7 +2503,11 @@ export function ChatStateAdapterProvider({
         capability: effectiveCapability,
         workspaceMode: effectiveWorkspaceMode ?? "",
         knowledgeBases: effectiveKnowledgeBases,
+        skills: effectiveResources.skills,
+        mcp: effectiveResources.mcp,
         sessionId: session.sessionId,
+        // Existing sessions inherit server ownership; new drafts declare it once.
+        ...(!session.sessionId ? { workspaceId: session.workspaceId ?? null } : {}),
         courseId: session.courseId.trim() || null,
         persistUserMessage,
         followupQuestionContext:
@@ -2422,6 +2518,8 @@ export function ChatStateAdapterProvider({
           selectionTutorContext && typeof selectionTutorContext === "object"
             ? (selectionTutorContext as Record<string, unknown>)
             : null,
+        consultPartnerId: typeof consultPartnerId === "string" ? consultPartnerId : null,
+        partnerDiscussionGroupId: typeof partnerDiscussionGroupId === "string" ? partnerDiscussionGroupId : null,
         subagentConsultBudget:
           typeof subagentConsultBudget === "number"
             ? subagentConsultBudget
@@ -2482,8 +2580,8 @@ export function ChatStateAdapterProvider({
     if (!session) return;
     const turnId = session.activeTurnId;
     const runner = runnersRef.current.get(key);
-    if (runner?.client.connected) {
-      if (turnId) {
+    if (runner) {
+      if (runner.client.connected && turnId) {
         runner.client.send({ type: "cancel_turn", turn_id: turnId });
       }
       runner.client.disconnect();
@@ -2578,8 +2676,10 @@ export function ChatStateAdapterProvider({
       llmSelection: current.llmSelection,
       masteryPathId: current.masteryPathId,
       masterySessionMode: current.masterySessionMode,
+      workspaceId: current.workspaceId,
       courseId: current.courseId,
       personaSelection: current.personaSelection,
+      resourceSelection: current.resourceSelection,
       messages: current.messages,
       isStreaming: current.isStreaming,
       currentStage: current.currentStage,
@@ -2638,6 +2738,10 @@ export function ChatStateAdapterProvider({
     dispatch({ type: "SET_PERSONA_SELECTION", persona });
   }, []);
 
+  const setResourceSelection = useCallback((selection: ResourceSelection) => {
+    dispatch({ type: "SET_RESOURCE_SELECTION", selection });
+  }, []);
+
   const setLanguage = useCallback((lang: string) => {
     dispatch({ type: "SET_LANGUAGE", lang });
   }, []);
@@ -2681,6 +2785,7 @@ export function ChatStateAdapterProvider({
 
   const editMessage = useCallback(
     async (messageId: number, newContent: string) => {
+      const generation = runtimeGeneration.current;
       const trimmed = newContent.trim();
       if (!trimmed) return;
       const currentState = stateRef.current;
@@ -2706,7 +2811,7 @@ export function ChatStateAdapterProvider({
       } catch {
         return;
       }
-      if (!original) return;
+      if (!original || generation !== runtimeGeneration.current) return;
       const parentId = original.parentMessageId ?? null;
       sendMessage(
         trimmed,
@@ -2756,6 +2861,7 @@ export function ChatStateAdapterProvider({
 
   const deleteTurn = useCallback(
     async (messageId: number) => {
+      const generation = runtimeGeneration.current;
       const currentState = stateRef.current;
       const key = currentState.selectedKey;
       if (!key) return;
@@ -2779,7 +2885,7 @@ export function ChatStateAdapterProvider({
       } catch {
         return;
       }
-      if (!target || typeof target.id !== "number" || target.id < 0) return;
+      if (!target || typeof target.id !== "number" || target.id < 0 || generation !== runtimeGeneration.current) return;
       const effectiveId = target.id;
       try {
         await deleteMessage(session.sessionId, effectiveId);
@@ -2809,6 +2915,7 @@ export function ChatStateAdapterProvider({
       setMasterySessionMode,
       setCourseId,
       setPersonaSelection,
+      setResourceSelection,
       setLanguage,
       sendMessage,
       cancelStreamingTurn,
@@ -2838,6 +2945,7 @@ export function ChatStateAdapterProvider({
       setMasterySessionMode,
       setCourseId,
       setPersonaSelection,
+      setResourceSelection,
       setLanguage,
       sendMessage,
       cancelStreamingTurn,

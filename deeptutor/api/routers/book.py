@@ -68,6 +68,7 @@ def _book_paused_http(exc: BookPausedError) -> HTTPException:
 
 
 class CreateBookRequest(BaseModel):
+    source_refs: list[dict[str, Any]] = Field(default_factory=list, max_length=32)
     user_intent: str = Field(default="")
     chat_session_id: str = Field(default="")
     chat_selections: list[dict[str, Any]] = Field(default_factory=list)
@@ -792,6 +793,7 @@ async def create_book(req: CreateBookRequest) -> dict[str, Any]:
     try:
         book, proposal = await engine.create_book(
             user_intent=req.user_intent,
+            source_refs=req.source_refs,
             chat_session_id=req.chat_session_id,
             chat_selections=req.chat_selections,
             notebook_refs=req.notebook_refs,
@@ -1530,7 +1532,21 @@ async def book_websocket(ws: WebSocket) -> None:
                     await send({"type": "error", "content": f"Book not found: {book_id}"})
                     continue
 
+            activity = None
             try:
+                from deeptutor.services.workspace.activity import acquire_activity
+                from deeptutor.services.workspace.context import (
+                    current_workspace_id,
+                    resolve_workspace_scope,
+                )
+                from deeptutor.services.workspace.models import WorkspaceError
+
+                activity = acquire_activity()
+                if (
+                    msg_type != "subscribe"
+                    and resolve_workspace_scope(current_workspace_id()).archived
+                ):
+                    raise WorkspaceError("Restore this workspace before changing its data.")
                 if msg_type == "subscribe":
                     if not book_id:
                         await send({"type": "error", "content": "subscribe requires book_id"})
@@ -1561,6 +1577,7 @@ async def book_websocket(ws: WebSocket) -> None:
                     engine = get_book_engine()
                     book, proposal = await engine.create_book(
                         user_intent=str(data.get("user_intent") or ""),
+                        source_refs=data.get("source_refs") or [],
                         chat_session_id=str(data.get("chat_session_id") or ""),
                         chat_selections=data.get("chat_selections") or [],
                         notebook_refs=data.get("notebook_refs") or [],
@@ -1729,6 +1746,9 @@ async def book_websocket(ws: WebSocket) -> None:
             except Exception as exc:
                 logger.error(f"book ws action {msg_type} failed: {exc}", exc_info=True)
                 await send({"type": "error", "content": str(exc)})
+            finally:
+                if activity is not None:
+                    activity.close()
 
     except WebSocketDisconnect:
         pass

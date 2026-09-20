@@ -61,6 +61,7 @@ from deeptutor.services.llm import (
 from deeptutor.services.llm.capabilities import threads_session_id
 from deeptutor.services.llm.multimodal import should_degrade_to_text, strip_image_parts_inplace
 from deeptutor.services.llm.request_compat import (
+    is_forced_tool_choice_unsupported,
     is_image_input_unsupported,
     is_stream_options_unsupported,
     is_tool_schema_unsupported,
@@ -276,6 +277,10 @@ class AgentLoop:
         # the declared parameter types to decode string-marked containers.
         self._tool_schema_catalog = tool_schemas
         self._last_request: LLMRequestSnapshot | None = None
+        self._request_tools: list[dict[str, Any]] | None = tool_schemas
+        self._request_fingerprint = (context.runtime.previous_model_turn or {}).get(
+            "request_fingerprint"
+        )
         self.source = pipeline.event_source
         self.stage = pipeline.event_stage
 
@@ -305,11 +310,38 @@ class AgentLoop:
                 kb_seed=seed_block,
                 include_tool_manifest=bool(self.tool_schemas),
             )
-            outcome = await self._run_loop(
-                messages=messages,
-                state=state,
-                checkpoint_boundary=len(messages),
-            )
+            try:
+                outcome = await self._run_loop(
+                    messages=messages,
+                    state=state,
+                    checkpoint_boundary=len(messages),
+                )
+                if outcome.final_text and (
+                    messages[-1].get("role") != "assistant" or not messages[-1].get("content")
+                ):
+                    # Terminator tools and capability overrides can produce the
+                    # visible answer without a final model message.
+                    messages.append({"role": "assistant", "content": outcome.final_text})
+            finally:
+                from deeptutor.services.session.model_history import (
+                    complete_tool_results,
+                    normalize_model_turn,
+                )
+
+                # Keep the prepared input (including attachments and briefings)
+                # and every model/tool message, independently of display repair.
+                self.context.runtime.model_turn = normalize_model_turn(
+                    {
+                        "version": 1,
+                        "messages": complete_tool_results(
+                            messages[self.pipeline._model_turn_start :]
+                        ),
+                        "system": messages[0]["content"],
+                        "tools": self._request_tools,
+                        "route": {"provider": self.pipeline.binding, "model": self.pipeline.model},
+                        "request_fingerprint": self._request_fingerprint,
+                    }
+                )
         if outcome.provider_response_state is not None:
             self.context.runtime.provider_response_state = outcome.provider_response_state
 
@@ -612,6 +644,7 @@ class AgentLoop:
                     )
                 await self._release_deferred_output(result)
                 # Finish: the text streamed live this round IS the answer.
+                messages.append(_assistant_round_message(result))
                 return await self._finalize_finish(
                     final_text,
                     visible_text=result.visible_text,
@@ -836,6 +869,7 @@ class AgentLoop:
         reasoning_without_answer = bool(result.reasoning_content) or bool(
             result.text.strip() and not self._clean(result.text)
         )
+        messages.append(_assistant_round_message(result))
         return await self._finalize_finish(
             result.text,
             visible_text=result.visible_text,
@@ -982,7 +1016,10 @@ class AgentLoop:
 
         kwargs: dict[str, Any] = {
             "model": self.pipeline.model,
-            "messages": messages,
+            "messages": [
+                {key: value for key, value in message.items() if key != "_context_snapshot"}
+                for message in messages
+            ],
             "stream": True,
             **self.pipeline._completion_kwargs(max_tokens=max_tokens),
         }
@@ -1006,6 +1043,22 @@ class AgentLoop:
                 else "auto"
             )
         forced_tool_choice = isinstance(kwargs.get("tool_choice"), dict)
+        self._request_tools = tool_schemas
+        from deeptutor.services.llm.request_cache import compare_requests, fingerprint_request
+
+        fingerprint = fingerprint_request(
+            kwargs["messages"],
+            kwargs.get("tools"),
+            {
+                "provider": self.pipeline.binding,
+                "model": self.pipeline.model,
+                "base_url": getattr(self.pipeline.llm_config, "base_url", None),
+                "wire_api": getattr(self.pipeline.llm_config, "wire_api", None),
+            },
+        )
+        request_cache = compare_requests(self._request_fingerprint, fingerprint)
+        self._request_fingerprint = fingerprint
+        trace_meta = merge_trace_metadata(trace_meta, {"request_cache": request_cache})
         # What this request actually carried, pinned now: the loop keeps
         # appending to ``messages`` and the deferred loader keeps appending to
         # ``tool_schemas``, so the turn's context budget is read off the last
@@ -1149,6 +1202,11 @@ class AgentLoop:
             response_stream = None
             try:
                 response_stream = await self._create_response_stream(kwargs, trace_meta, stage)
+                # A provider's image fallback can replace content in the wire
+                # copy. Retain that accepted representation for later rounds.
+                for original, accepted in zip(messages, kwargs["messages"]):
+                    if "content" in accepted:
+                        original["content"] = accepted["content"]
                 async for chunk in response_stream:
                     usage = getattr(chunk, "usage", None)
                     if usage is not None:
@@ -1270,8 +1328,30 @@ class AgentLoop:
                                     tool_name=str(part.get("name") or ""),
                                     arguments=str(part.get("arguments") or ""),
                                 )
+            except asyncio.CancelledError:
+                if text_parts or reasoning_parts:
+                    messages.append(
+                        _assistant_round_message(
+                            LLMCallResult(
+                                text="".join(text_parts),
+                                reasoning_content="".join(reasoning_parts),
+                                thinking_blocks=thinking_blocks,
+                            )
+                        )
+                    )
+                raise
             except Exception as exc:
                 if not is_transient_transport_error(exc):
+                    if text_parts or reasoning_parts:
+                        messages.append(
+                            _assistant_round_message(
+                                LLMCallResult(
+                                    text="".join(text_parts),
+                                    reasoning_content="".join(reasoning_parts),
+                                    thinking_blocks=thinking_blocks,
+                                )
+                            )
+                        )
                     raise
                 can_retry = not output_emitted and attempt < len(_PROVIDER_RETRY_DELAYS)
                 if can_retry:
@@ -1301,6 +1381,16 @@ class AgentLoop:
                     continue
 
                 partial_response = output_emitted
+                if text_parts or reasoning_parts:
+                    messages.append(
+                        _assistant_round_message(
+                            LLMCallResult(
+                                text="".join(text_parts),
+                                reasoning_content="".join(reasoning_parts),
+                                thinking_blocks=thinking_blocks,
+                            )
+                        )
+                    )
                 await self.stream.progress(
                     "",
                     source=self.source,
@@ -1570,6 +1660,15 @@ class AgentLoop:
         try:
             return await self.client.chat.completions.create(**kwargs)
         except Exception as exc:
+            if (
+                kwargs.get("tools")
+                and kwargs.get("tool_choice") != "auto"
+                and is_forced_tool_choice_unsupported(exc)
+            ):
+                # Some thinking models reject a forced choice while supporting
+                # the schemas themselves. Keep the tool surface and its cache.
+                retry_kwargs = {**kwargs, "tool_choice": "auto"}
+                return await self._create_response_stream(retry_kwargs, trace_meta, stage)
             if kwargs.get("tools") and is_tool_schema_unsupported(exc):
                 # Capture the provider's raw rejection body. Without it there is
                 # no way to tell *which* parameter/shape a new model family
@@ -1598,6 +1697,7 @@ class AgentLoop:
                 retry_kwargs.pop("tools", None)
                 retry_kwargs.pop("tool_choice", None)
                 self.tool_schemas = None
+                self._request_tools = None
                 return await self.client.chat.completions.create(**retry_kwargs)
             if "stream_options" in kwargs and is_stream_options_unsupported(exc):
                 retry_kwargs = dict(kwargs)

@@ -177,6 +177,7 @@ class QuestionBankQuery:
 
     category_id: int | None = None
     uncategorized: bool = False
+    mistakes_only: bool = False
     bookmarked: bool | None = None
     is_correct: bool | None = None
     source: str = ""
@@ -199,6 +200,7 @@ class QuestionBankQuery:
         """Clamp untrusted inputs into the ranges the SQL below assumes."""
         return QuestionBankQuery(
             category_id=self.category_id,
+            mistakes_only=self.mistakes_only,
             uncategorized=self.uncategorized and self.category_id is None,
             bookmarked=self.bookmarked,
             is_correct=self.is_correct,
@@ -243,6 +245,10 @@ class SQLiteSessionStore:
 
     def _migrate_legacy_db(self, path_service) -> None:
         """Move the legacy ``data/chat_history.db`` into ``data/user/`` once."""
+        from deeptutor.multi_user.paths import get_account_path_service
+
+        if self.db_path != get_account_path_service().get_chat_history_db():
+            return
         legacy_path = path_service.project_root / "data" / "chat_history.db"
         if self.db_path.exists() or not legacy_path.exists() or legacy_path == self.db_path:
             return
@@ -455,23 +461,34 @@ class SQLiteSessionStore:
             self._migrate_notebook_entries_add_assessment_review(conn)
             self._migrate_notebook_entries_add_assessment_v2(conn)
             self._migrate_turn_runtime_columns(conn)
+            from deeptutor.services.practice.storage import initialize_practice
+
+            initialize_practice(conn)
             conn.commit()
 
     @staticmethod
     def _migrate_workspace_preferences(conn: sqlite3.Connection) -> int:
-        """Backfill the explicit workspace discriminator without reordering history."""
+        """Upgrade workspace metadata and preserve legacy deleted chats as archives.
+
+        Clearing deleted_at only after setting archived keeps old recoverable
+        conversations out of the sidebar without discarding their contents.
+        Logical timestamps stay unchanged.
+        """
 
         migrated = 0
-        rows = conn.execute("SELECT id, preferences_json FROM sessions").fetchall()
+        rows = conn.execute("SELECT id, preferences_json, deleted_at FROM sessions").fetchall()
         for row in rows:
             current = _json_loads(row["preferences_json"], {})
             if not isinstance(current, dict):
                 continue
             upgraded = upgrade_workspace_preferences(current)
-            if upgraded == current:
+            was_deleted = row["deleted_at"] is not None
+            if was_deleted:
+                upgraded = {**upgraded, "archived": True}
+            if upgraded == current and not was_deleted:
                 continue
             conn.execute(
-                "UPDATE sessions SET preferences_json = ? WHERE id = ?",
+                "UPDATE sessions SET preferences_json = ?, deleted_at = NULL WHERE id = ?",
                 (_json_dumps(upgraded), row["id"]),
             )
             migrated += 1
@@ -789,16 +806,20 @@ class SQLiteSessionStore:
         now = time.time()
         resolved_id = session_id or f"unified_{int(now * 1000)}_{uuid.uuid4().hex[:8]}"
         resolved_title = (title or "New conversation").strip() or "New conversation"
+        from deeptutor.services.workspace.context import get_workspace_scope
+
+        scope = get_workspace_scope()
+        preferences = {"workspace_id": scope.workspace_id} if scope is not None else {}
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO sessions (
                     id, title, created_at, updated_at,
-                    compressed_summary, summary_up_to_msg_id
+                    compressed_summary, summary_up_to_msg_id, preferences_json
                 )
-                VALUES (?, ?, ?, ?, '', 0)
+                VALUES (?, ?, ?, ?, '', 0, ?)
                 """,
-                (resolved_id, resolved_title[:100], now, now),
+                (resolved_id, resolved_title[:100], now, now, _json_dumps(preferences)),
             )
             conn.commit()
         return {
@@ -809,6 +830,7 @@ class SQLiteSessionStore:
             "updated_at": now,
             "compressed_summary": "",
             "summary_up_to_msg_id": 0,
+            "preferences": preferences,
         }
 
     async def create_session(
@@ -1472,15 +1494,7 @@ class SQLiteSessionStore:
         return cur.rowcount > 0
 
     async def delete_session(self, session_id: str) -> bool:
-        """Remove a session outright, recycle bin or not.
-
-        The internal cleanups own this one: a reading workspace that is gone
-        takes its sessions with it, and those never belonged to the learner's
-        recycle bin — they would arrive there unasked and restore into a
-        workspace that no longer exists. The chat surface calls
-        :meth:`soft_delete_session` instead, which is the deletion a learner
-        performs and can undo.
-        """
+        """Permanently remove a conversation and its stored messages."""
         return await self._run(self._delete_session_sync, session_id)
 
     def _soft_delete_session_sync(self, session_id: str) -> bool:
@@ -2151,6 +2165,57 @@ class SQLiteSessionStore:
     async def get_message_path(self, session_id: str, leaf_message_id: int) -> list[dict[str, Any]]:
         return await self._run(self._get_message_path_sync, session_id, int(leaf_message_id))
 
+    async def usage_records(self, start_at: float, end_at: float) -> list[dict[str, Any]]:
+        """Read usage from canonical turn events, with legacy message fallback."""
+        from .usage_statistics import summaries_from_events
+
+        def read() -> list[dict[str, Any]]:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """SELECT m.id, m.session_id, m.created_at, m.events_json, m.metadata_json AS message_metadata, t.id AS turn_id,
+                              e.type, e.metadata_json
+                       FROM messages AS m
+                       LEFT JOIN turns AS t
+                         ON t.assistant_message_id = m.id AND t.session_id = m.session_id
+                       LEFT JOIN turn_events AS e
+                         ON e.turn_id = t.id AND (e.type IN ('result', 'done') OR json_extract(e.metadata_json, '$.model') IS NOT NULL)
+                       WHERE m.role = 'assistant' AND m.created_at >= ? AND m.created_at < ?
+                         AND substr(m.session_id, 1, 9) != 'imported_'
+                       ORDER BY m.created_at, m.id, e.seq""",
+                    (start_at, end_at),
+                )
+                records: dict[int, dict[str, Any]] = {}
+                events: dict[int, list[dict[str, Any]]] = {}
+                metadata: dict[int, dict[str, Any]] = {}
+                for row in rows:
+                    mid = row["id"]
+                    if mid not in records:
+                        records[mid] = {
+                            "session_id": row["session_id"],
+                            "turn_id": row["turn_id"],
+                            "created_at": row["created_at"],
+                            "summaries": summaries_from_events(
+                                _json_loads(row["events_json"], []),
+                                _json_loads(row["message_metadata"], {}),
+                            ),
+                        }
+                        events[mid] = []
+                        metadata[mid] = _json_loads(row["message_metadata"], {})
+                    if row["type"]:
+                        events[mid].append(
+                            {
+                                "type": row["type"],
+                                "metadata": _json_loads(row["metadata_json"], {}),
+                            }
+                        )
+                for mid, record in records.items():
+                    canonical = summaries_from_events(events[mid], metadata[mid])
+                    if canonical:
+                        record["summaries"] = canonical
+                return list(records.values())
+
+        return await self._run(read)
+
     async def get_messages(self, session_id: str) -> list[dict[str, Any]]:
         return await self._run(self._get_messages_sync, session_id)
 
@@ -2268,7 +2333,7 @@ class SQLiteSessionStore:
         LEFT JOIN messages m ON m.session_id = s.id
         {where}
         GROUP BY s.id
-        ORDER BY s.updated_at DESC
+        ORDER BY s.updated_at DESC, s.id ASC
         LIMIT ? OFFSET ?
     """
 
@@ -2326,10 +2391,24 @@ class SQLiteSessionStore:
         self,
         limit: int = 50,
         offset: int = 0,
+        workspace_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        # Native chats only — imported histories surface under their own
-        # Space category, not the regular history list.
-        return self._list_session_summaries_sync(self._WHERE_NATIVE, limit, offset)
+        if workspace_id is None:
+            return self._list_session_summaries_sync(self._WHERE_NATIVE, limit, offset)
+        where = (
+            self._WHERE_NATIVE
+            + """
+            AND COALESCE(json_extract(s.preferences_json, '$.workspace_id'), '') = ?
+            AND COALESCE(json_extract(s.preferences_json, '$.archived'), 0) = 0
+            AND COALESCE(json_extract(s.preferences_json, '$.parent_session_id'), '') = ''
+        """
+        )
+        with self._connect() as conn:
+            rows = conn.execute(
+                self._SESSION_SUMMARY_SQL.format(where=where),
+                (workspace_id, limit, offset),
+            ).fetchall()
+        return [self._session_summary_payload(row) for row in rows]
 
     def _list_imported_sessions_sync(
         self,
@@ -2342,8 +2421,10 @@ class SQLiteSessionStore:
         self,
         limit: int = 50,
         offset: int = 0,
+        *,
+        workspace_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        return await self._run(self._list_sessions_sync, limit, offset)
+        return await self._run(self._list_sessions_sync, limit, offset, workspace_id)
 
     def _search_sessions_sync(
         self,
@@ -2381,7 +2462,7 @@ class SQLiteSessionStore:
                     SELECT s.*
                     FROM sessions s
                     WHERE {match_condition}
-                    ORDER BY s.updated_at DESC
+                    ORDER BY s.updated_at DESC, s.id ASC
                     LIMIT ? OFFSET ?
                 ),
                 best_messages AS (
@@ -2442,7 +2523,7 @@ class SQLiteSessionStore:
                 LEFT JOIN messages m ON m.session_id = s.id
                 LEFT JOIN best_messages bm ON bm.session_id = s.id
                 GROUP BY s.id
-                ORDER BY s.updated_at DESC
+                ORDER BY s.updated_at DESC, s.id ASC
                 """,  # nosec B608 - match_condition is a module-owned SQL literal
                 (
                     normalized,
@@ -2934,6 +3015,10 @@ class SQLiteSessionStore:
             )
             """
         )
+        if query.mistakes_only:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM practice_review_state r WHERE r.entry_id = n.id AND r.is_mistake = 1)"
+            )
         if query.category_id is not None:
             joins.append(" INNER JOIN notebook_entry_categories ec ON ec.entry_id = n.id")
             conditions.append("ec.category_id = ?")
@@ -3031,6 +3116,24 @@ class SQLiteSessionStore:
             )
         return grouped
 
+    @staticmethod
+    def _load_practice_for(
+        conn: sqlite3.Connection, entry_ids: list[int]
+    ) -> dict[int, dict[str, Any]]:
+        if not entry_ids:
+            return {}
+        placeholders = ",".join("?" for _ in entry_ids)
+        rows = conn.execute(
+            f"""SELECT r.*,
+                (SELECT e.answer FROM practice_review_events e WHERE e.entry_id=r.entry_id
+                 ORDER BY e.reviewed_at DESC, e.rowid DESC LIMIT 1) AS last_answer,
+                (SELECT e.rating FROM practice_review_events e WHERE e.entry_id=r.entry_id
+                 ORDER BY e.reviewed_at DESC, e.rowid DESC LIMIT 1) AS last_rating
+                FROM practice_review_state r WHERE r.entry_id IN ({placeholders})""",  # nosec B608
+            entry_ids,
+        ).fetchall()
+        return {int(row["entry_id"]): dict(row) for row in rows}
+
     def _list_notebook_entries_sync(self, query: QuestionBankQuery) -> dict[str, Any]:
         query = query.normalized()
         join_sql, where_sql, params = self._question_bank_filters(query)
@@ -3066,8 +3169,10 @@ class SQLiteSessionStore:
             ).fetchall()
             items = [self._serialize_notebook_entry(r) for r in rows]
             grouped = self._load_categories_for(conn, [int(i["id"]) for i in items])
+            practice = self._load_practice_for(conn, [int(i["id"]) for i in items])
         for item in items:
             item["categories"] = grouped.get(int(item["id"]), [])
+            item["practice"] = practice.get(int(item["id"]))
         return {"items": items, "total": total}
 
     async def list_notebook_entries(
@@ -3091,6 +3196,7 @@ class SQLiteSessionStore:
         score_trend: str = "",
         search: str = "",
         uncategorized: bool = False,
+        mistakes_only: bool = False,
         sort: str = "recent",
     ) -> dict[str, Any]:
         """List question-bank entries. Every row carries its categories."""
@@ -3098,6 +3204,7 @@ class SQLiteSessionStore:
             self._list_notebook_entries_sync,
             QuestionBankQuery(
                 category_id=category_id,
+                mistakes_only=mistakes_only,
                 uncategorized=uncategorized,
                 bookmarked=bookmarked,
                 is_correct=is_correct,
@@ -3242,6 +3349,7 @@ class SQLiteSessionStore:
             if row is None:
                 return None
             entry = self._serialize_notebook_entry(row)
+            entry["practice"] = self._load_practice_for(conn, [entry_id]).get(entry_id)
             cats = conn.execute(
                 """
                 SELECT c.id, c.name

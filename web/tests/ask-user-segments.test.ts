@@ -80,7 +80,11 @@ test("work is laid out between the text that introduced it and what followed", (
 
 test("a fresh run of work opens below the text that follows the previous one", () => {
   const segments = extractMessageSegments([
-    event("content", { call_id: "r1", call_kind: "agent_loop_round" }, "First,"),
+    event(
+      "content",
+      { call_id: "r1", call_kind: "agent_loop_round" },
+      "First,",
+    ),
     event("tool_call", { call_id: "t1" }, "read_source"),
     event("content", { call_id: "r2", call_kind: "agent_loop_round" }, "Now,"),
     event("tool_call", { call_id: "t2" }, "web_search"),
@@ -109,7 +113,10 @@ test("a reloaded turn keeps each run of work under its own paragraph", () => {
   const closing = "So the answer is 1957.";
   const segments = extractMessageSegments(
     [
-      event("tool_call", { call_id: "t1", assistant_content_offset: first.length }),
+      event("tool_call", {
+        call_id: "t1",
+        assistant_content_offset: first.length,
+      }),
       event("tool_result", { call_id: "t1" }, "a source"),
       event("tool_call", {
         call_id: "t2",
@@ -164,7 +171,9 @@ test("reasoning produced after a card becomes its own segment below it", () => {
     "planning a question",
   );
   const afterCard = segments[2];
-  assert.equal(afterCard.kind === "trace" && afterCard.events.length, 1);
+  // The first answer delta closes the preceding thinking disclosure.
+  assert.equal(afterCard.kind === "trace" && afterCard.events.length, 2);
+  assert.equal(afterCard.kind === "trace" && afterCard.events[1].content, "Correct!");
   assert.equal(
     afterCard.kind === "trace" && afterCard.events[0].content,
     "grading their answer",
@@ -200,9 +209,8 @@ test("a turn with no tool work is a single run of prose", () => {
     segments.map((segment) => segment.kind),
     ["trace", "text"],
   );
-  // The reasoning is claimed by the inline region; only the answer text is
-  // left over, and answer text was never a trace row to begin with.
-  assert.deepEqual(leadingTraceEvents(events, segments), [events[1]]);
+  // The inline trace also claims the first answer delta as its closing marker.
+  assert.deepEqual(leadingTraceEvents(events, segments), []);
 });
 
 test("each card gets the rounds that followed it", () => {
@@ -322,24 +330,32 @@ test("a posed mastery question is its own segment, not an ask_user card", () => 
   );
 });
 
-test("the call a card renders draws no row of its own", () => {
-  // The card is that call's presentation. A row for it as well says the same
-  // thing twice, and lands below the card it produced — reading as work done
-  // after the question rather than as the asking of it.
+test("a card's call keeps its row, but nothing else of that call does", () => {
+  // Stopping to ask is a step, and the trace is where steps are recorded: with
+  // the row suppressed, an answered exchange read as though the answers had
+  // arrived on their own. What the row must not do is restate the card, so the
+  // call's *result* — the payload the card is built from — stays out.
+  const call = event(
+    "tool_call",
+    { call_id: "call-1", tool_call_id: "call-1", tool_name: "ask_user" },
+    "ask_user",
+  );
   const segments = extractMessageSegments([
     event(
       "content",
       { call_id: "r1", call_kind: "agent_loop_round" },
       "First, a question.",
     ),
-    event("tool_call", { call_id: "call-1", tool_name: "ask_user" }, "ask_user"),
+    call,
     askUserCard("call-1"),
   ]);
 
   assert.deepEqual(
     segments.map((segment) => segment.kind),
-    ["text", "ask_user"],
+    ["text", "trace", "ask_user"],
   );
+  const trace = segments[1];
+  assert.deepEqual(trace.kind === "trace" && trace.events, [call]);
 });
 
 test("a mastery card posed on the old ask_user channel still reads as one", () => {
@@ -577,7 +593,10 @@ test("dropping a settled preview does not shift another card's text offset", () 
 
 test("a preview without a call id is still promoted by the result", () => {
   const segments = extractMessageSegments(
-    [draft(null, { intro: "Which path?", questions: [] }), askUserCard("call-1")],
+    [
+      draft(null, { intro: "Which path?", questions: [] }),
+      askUserCard("call-1"),
+    ],
     "",
     { streaming: true },
   );

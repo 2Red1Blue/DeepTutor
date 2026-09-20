@@ -1,3 +1,4 @@
+import type { LearningOrigin } from "@/lib/learning-library";
 import { apiUrl, apiFetch } from "./api";
 
 export interface ModuleInit {
@@ -463,7 +464,7 @@ export interface TopicReview {
   recent_failure: boolean;
 }
 
-export interface MasteryTopic {
+export interface MasteryTopic extends LearningOrigin {
   path_id: string;
   name: string;
   metadata: TopicMetadata;

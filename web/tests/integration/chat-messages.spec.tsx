@@ -161,3 +161,26 @@ describe('chat message feature', () => {
     expect(await screen.findByRole('button', { name: 'Could not copy' })).toBeVisible()
   })
 })
+
+describe('empty reply outcomes', () => {
+  it.each([
+    ['cancelled', 'Turn cancelled', 'Stopped'],
+    ['failed', 'Provider quota exceeded', 'Provider quota exceeded'],
+    ['legacy', 'Connection timed out', 'Connection timed out'],
+    ['empty', '', 'No response was generated. Please try again.'],
+  ])('renders %s replies with an explanation', (status, content, expected) => {
+    const events: StreamEvent[] = status === 'empty' ? [] : [{
+      type: 'error', source: 'chat', stage: '', content, timestamp: 0,
+      metadata: status === 'legacy' ? {} : { turn_terminal: true, status },
+    }];
+    render(<WatchingProvider><ChatMessageList
+      messages={[{ id: 1, role: 'user', content: 'hi' }, { id: 2, role: 'assistant', content: '', events }]}
+      isStreaming={false}
+      onCopyAssistantMessage={async () => undefined}
+      onRegenerateMessage={() => undefined}
+      onDeleteTurn={() => undefined}
+    /></WatchingProvider>);
+    expect(screen.getByText(expected)).toBeVisible();
+    if (status === 'cancelled') expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
