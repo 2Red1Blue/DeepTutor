@@ -30,7 +30,7 @@
   <a href="README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](../../LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -94,7 +94,7 @@ deeptutor workspace reset
 <details>
 <summary><b>オプション1 — PyPIからインストール</b> · クローン不要のフルローカルWebアプリ + CLI</summary>
 
-クローン不要のフルローカルWebアプリ + CLI。**Python 3.11–3.14** とPATH上の**Node.js 20+**ランタイムが必要です（パッケージ済みのNext.jsスタンドアロンサーバーは`deeptutor start`によって起動されます）。
+クローン不要のフルローカルWebアプリ + CLI。**Python 3.11–3.14** とPATH上の**Node.js 24+**ランタイムが必要です（パッケージ済みのNext.jsスタンドアロンサーバーは`deeptutor start`によって起動されます）。
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -112,7 +112,7 @@ deeptutor start    # starts backend + frontend; keep the terminal open
 <details>
 <summary><b>オプション2 — ソースからインストール</b> · チェックアウトに対して開発</summary>
 
-チェックアウトに対して開発する場合。CIとDockerに合わせて**Python 3.11–3.14**と**Node.js 22 LTS**を使用してください。
+チェックアウトに対して開発する場合。CIとDockerに合わせて**Python 3.11–3.14**と**Node.js 24 LTS**を使用してください。
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git

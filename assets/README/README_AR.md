@@ -30,7 +30,7 @@
   <a href="README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](../../LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -94,7 +94,7 @@ deeptutor workspace reset
 <details>
 <summary><b>الخيار 1 — التثبيت من PyPI</b> · تطبيق ويب محلي كامل + CLI، لا يلزم الاستنساخ</summary>
 
-تطبيق ويب محلي كامل + CLI، لا يلزم الاستنساخ. يحتاج **Python 3.11–3.14** وبيئة تشغيل **Node.js 20+** في PATH (يُشغَّل خادم Next.js المستقل المُحزَّم بواسطة `deeptutor start`).
+تطبيق ويب محلي كامل + CLI، لا يلزم الاستنساخ. يحتاج **Python 3.11–3.14** وبيئة تشغيل **Node.js 24+** في PATH (يُشغَّل خادم Next.js المستقل المُحزَّم بواسطة `deeptutor start`).
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -112,7 +112,7 @@ deeptutor start    # starts backend + frontend; keep the terminal open
 <details>
 <summary><b>الخيار 2 — التثبيت من المصدر</b> · للتطوير مقابل نسخة مسحوبة</summary>
 
-للتطوير مقابل نسخة مسحوبة. استخدم **Python 3.11–3.14** و**Node.js 22 LTS** لمطابقة CI وDocker.
+للتطوير مقابل نسخة مسحوبة. استخدم **Python 3.11–3.14** و**Node.js 24 LTS** لمطابقة CI وDocker.
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git

@@ -30,7 +30,7 @@
   <a href="assets/README/README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -273,7 +273,7 @@ shown as **best effort** in Workspace settings.
 <details>
 <summary><b>Option 1 — Install From PyPI</b> · full local Web app + CLI, no clone required</summary>
 
-Full local Web app + CLI, no clone required. Needs **Python 3.11–3.14** and a **Node.js 20+** runtime on PATH (the packaged Next.js standalone server is spawned by `deeptutor start`).
+Full local Web app + CLI, no clone required. Needs **Python 3.11–3.14** and a **Node.js 24+** runtime on PATH (the packaged Next.js standalone server is spawned by `deeptutor start`).
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -291,7 +291,7 @@ After `deeptutor start`, open the frontend URL printed in the terminal — by de
 <details>
 <summary><b>Option 2 — Install From Source</b> · develop against a checkout</summary>
 
-For development against a checkout. Use **Python 3.11–3.14** and **Node.js 22 LTS** to match CI and Docker.
+For development against a checkout. Use **Python 3.11–3.14** and **Node.js 24 LTS** to match CI and Docker.
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git

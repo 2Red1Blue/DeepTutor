@@ -30,7 +30,7 @@
   <a href="README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](../../LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -94,7 +94,7 @@ deeptutor workspace reset
 <details>
 <summary><b>Option 1 — PyPI से Install करें</b> · पूरा local Web app + CLI, clone की जरूरत नहीं</summary>
 
-पूरा local Web app + CLI, clone की जरूरत नहीं। **Python 3.11–3.14** और PATH पर **Node.js 20+** runtime चाहिए (`deeptutor start` packaged Next.js standalone server को spawn करता है)।
+पूरा local Web app + CLI, clone की जरूरत नहीं। **Python 3.11–3.14** और PATH पर **Node.js 24+** runtime चाहिए (`deeptutor start` packaged Next.js standalone server को spawn करता है)।
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -112,7 +112,7 @@ deeptutor start    # starts backend + frontend; keep the terminal open
 <details>
 <summary><b>Option 2 — Source से Install करें</b> · checkout के विरुद्ध develop करें</summary>
 
-Checkout के विरुद्ध development के लिए। CI और Docker से match करने के लिए **Python 3.11–3.14** और **Node.js 22 LTS** उपयोग करें।
+Checkout के विरुद्ध development के लिए। CI और Docker से match करने के लिए **Python 3.11–3.14** और **Node.js 24 LTS** उपयोग करें।
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git

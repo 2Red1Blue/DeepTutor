@@ -38,7 +38,7 @@ class MemoryStorage implements Storage {
 
 // Node 25 exposes an incomplete experimental localStorage object unless a
 // backing file is configured. Install deterministic in-memory storage so the
-// rendered harness behaves the same on supported CI Node 22 and local Node.
+// rendered harness behaves the same on supported CI Node 24 and local Node.
 Object.defineProperty(globalThis, "localStorage", {
   configurable: true,
   value: new MemoryStorage(),

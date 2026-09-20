@@ -9,7 +9,10 @@
     "moduleResolution": "node",
     "incremental": false,
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "next": ["./node_modules/next/index.d.ts"],
+      "next/*": ["./node_modules/next/*"],
+      "lucide-react": ["./node_modules/lucide-react/dist/lucide-react.d.ts"]
     }
   },
   // The ambient File System Access declarations live in types/ and are

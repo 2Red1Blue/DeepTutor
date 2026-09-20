@@ -21,7 +21,7 @@ Use this skill when the user wants to:
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.11–3.14
 - DeepTutor installed: `pip install deeptutor` for the full Web app, `pip install deeptutor-cli` for CLI-only, or `pip install -e .` from a source checkout
 - Run `deeptutor init` for first-time interactive setup. It walks a guided wizard (ports → LLM → embedding → search → review) and writes the same settings as the Web Settings page under `data/user/settings`. Add `--cli` to skip the ports step for CLI-only use, or `--home <path>` to target a specific workspace.
 

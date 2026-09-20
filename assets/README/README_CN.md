@@ -30,7 +30,7 @@
   <a href="README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -94,7 +94,7 @@ deeptutor workspace reset
 <details>
 <summary><b>方式一 — 从 PyPI 安装</b> · 完整本地 Web 应用 + CLI，无需克隆仓库</summary>
 
-完整本地 Web 应用 + CLI，无需克隆仓库。需要 **Python 3.11–3.14** 以及 PATH 中的 **Node.js 20+** 运行时（打包的 Next.js 独立服务器由 `deeptutor start` 启动）。
+完整本地 Web 应用 + CLI，无需克隆仓库。需要 **Python 3.11–3.14** 以及 PATH 中的 **Node.js 24+** 运行时（打包的 Next.js 独立服务器由 `deeptutor start` 启动）。
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -112,7 +112,7 @@ deeptutor start    # starts backend + frontend; keep the terminal open
 <details>
 <summary><b>方式二 — 从源码安装</b> · 基于代码仓库进行开发</summary>
 
-适用于基于代码仓库的开发。使用 **Python 3.11–3.14** 和 **Node.js 22 LTS** 以匹配 CI 和 Docker 环境。
+适用于基于代码仓库的开发。使用 **Python 3.11–3.14** 和 **Node.js 24 LTS** 以匹配 CI 和 Docker 环境。
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git

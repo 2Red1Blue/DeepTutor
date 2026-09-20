@@ -30,7 +30,7 @@
   <a href="README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](../../LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -94,7 +94,7 @@ L'exécution est en lecture seule en dehors de `outputs/`. Copier un fichier gé
 <details>
 <summary><b>Option 1 — Installer depuis PyPI</b> · application Web locale complète + CLI, sans clonage</summary>
 
-Application Web locale complète + CLI, sans clonage requis. Nécessite **Python 3.11–3.14** et un runtime **Node.js 20+** dans le PATH (le serveur standalone Next.js packagé est lancé par `deeptutor start`).
+Application Web locale complète + CLI, sans clonage requis. Nécessite **Python 3.11–3.14** et un runtime **Node.js 24+** dans le PATH (le serveur standalone Next.js packagé est lancé par `deeptutor start`).
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -112,7 +112,7 @@ Après `deeptutor start`, ouvrez l'URL frontend affichée dans le terminal — p
 <details>
 <summary><b>Option 2 — Installer depuis les sources</b> · développer à partir d'un checkout</summary>
 
-Pour le développement à partir d'un checkout. Utilisez **Python 3.11–3.14** et **Node.js 22 LTS** pour correspondre à la CI et à Docker.
+Pour le développement à partir d'un checkout. Utilisez **Python 3.11–3.14** et **Node.js 24 LTS** pour correspondre à la CI et à Docker.
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git

@@ -30,7 +30,7 @@
   <a href="README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](../../LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -94,7 +94,7 @@ A execução é apenas de leitura fora de `outputs/`. Copiar um ficheiro gerado 
 <details>
 <summary><b>Opção 1 — Instalar a partir do PyPI</b> · aplicação web local completa + CLI, sem necessidade de clonar</summary>
 
-Aplicação web local completa + CLI, sem necessidade de clonar. Requer **Python 3.11–3.14** e um runtime **Node.js 20+** no PATH (o servidor standalone Next.js empacotado é iniciado por `deeptutor start`).
+Aplicação web local completa + CLI, sem necessidade de clonar. Requer **Python 3.11–3.14** e um runtime **Node.js 24+** no PATH (o servidor standalone Next.js empacotado é iniciado por `deeptutor start`).
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -112,7 +112,7 @@ Após `deeptutor start`, abra a URL do frontend impressa no terminal — por pre
 <details>
 <summary><b>Opção 2 — Instalar a partir do Código-Fonte</b> · desenvolver num checkout</summary>
 
-Para desenvolvimento num checkout. Use **Python 3.11–3.14** e **Node.js 22 LTS** para coincidir com CI e Docker.
+Para desenvolvimento num checkout. Use **Python 3.11–3.14** e **Node.js 24 LTS** para coincidir com CI e Docker.
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git

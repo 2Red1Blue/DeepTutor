@@ -30,7 +30,7 @@
   <a href="README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![สัญญาอนุญาต](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](../../LICENSE)
 [![รุ่นเผยแพร่บน GitHub](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -107,7 +107,7 @@ relative path เดียวกันเป๊ะนี้ยังใช้ไ
 <details>
 <summary><b>ตัวเลือกที่ 1 — ติดตั้งจาก PyPI</b> · แอป Web local แบบเต็มรูปแบบ + CLI ไม่ต้องโคลน</summary>
 
-แอป Web local แบบเต็มรูปแบบ + CLI ไม่ต้องโคลน ต้องการ **Python 3.11–3.14** และ runtime **Node.js 20+** บน PATH (เซิร์ฟเวอร์ standalone Next.js ที่แพ็คไว้จะถูกเปิดตัวโดย `deeptutor start`)
+แอป Web local แบบเต็มรูปแบบ + CLI ไม่ต้องโคลน ต้องการ **Python 3.11–3.14** และ runtime **Node.js 24+** บน PATH (เซิร์ฟเวอร์ standalone Next.js ที่แพ็คไว้จะถูกเปิดตัวโดย `deeptutor start`)
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -125,7 +125,7 @@ deeptutor start    # starts backend + frontend; keep the terminal open
 <details>
 <summary><b>ตัวเลือกที่ 2 — ติดตั้งจากซอร์สโค้ด</b> · พัฒนาจาก checkout</summary>
 
-สำหรับการพัฒนาจาก checkout ใช้ **Python 3.11–3.14** และ **Node.js 22 LTS** เพื่อให้ตรงกับ CI และ Docker
+สำหรับการพัฒนาจาก checkout ใช้ **Python 3.11–3.14** และ **Node.js 24 LTS** เพื่อให้ตรงกับ CI และ Docker
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git

@@ -30,7 +30,7 @@
   <a href="README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](../../LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -94,7 +94,7 @@ deeptutor workspace reset
 <details>
 <summary><b>方式一 — 從 PyPI 安裝</b> · 完整本機 Web 應用程式＋CLI，無須 clone</summary>
 
-完整本機 Web 應用程式＋CLI，無須 clone。需要 **Python 3.11–3.14**，且 PATH 中須有 **Node.js 20+** 執行階段（`deeptutor start` 會啟動套件內的 Next.js standalone 伺服器）。
+完整本機 Web 應用程式＋CLI，無須 clone。需要 **Python 3.11–3.14**，且 PATH 中須有 **Node.js 24+** 執行階段（`deeptutor start` 會啟動套件內的 Next.js standalone 伺服器）。
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -112,7 +112,7 @@ deeptutor start    # starts backend + frontend; keep the terminal open
 <details>
 <summary><b>方式二 — 從原始碼安裝</b> · 針對 checkout 進行開發</summary>
 
-適合針對原始碼 checkout 進行開發。請使用 **Python 3.11–3.14** 與 **Node.js 22 LTS**，以符合 CI 和 Docker 環境。
+適合針對原始碼 checkout 進行開發。請使用 **Python 3.11–3.14** 與 **Node.js 24 LTS**，以符合 CI 和 Docker 環境。
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git

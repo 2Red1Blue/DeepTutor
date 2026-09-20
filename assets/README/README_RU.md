@@ -30,7 +30,7 @@
   <a href="README_PL.md"><img alt="Polski" height="40" src="https://img.shields.io/badge/Polski-CDCFD4"></a>
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.11-3.14](https://img.shields.io/badge/Python-3.11--3.14-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
@@ -94,7 +94,7 @@ deeptutor workspace reset
 <details>
 <summary><b>Вариант 1 — Установка из PyPI</b> · полное локальное веб-приложение + CLI, клонирование не требуется</summary>
 
-Полное локальное веб-приложение + CLI без необходимости клонирования. Требуется **Python 3.11–3.14** и среда выполнения **Node.js 20+** в PATH (упакованный автономный сервер Next.js запускается командой `deeptutor start`).
+Полное локальное веб-приложение + CLI без необходимости клонирования. Требуется **Python 3.11–3.14** и среда выполнения **Node.js 24+** в PATH (упакованный автономный сервер Next.js запускается командой `deeptutor start`).
 
 ```bash
 mkdir -p my-deeptutor && cd my-deeptutor
@@ -112,7 +112,7 @@ deeptutor start    # запускает бэкенд + фронтенд; дер�
 <details>
 <summary><b>Вариант 2 — Установка из исходного кода</b> · разработка на основе чекаута</summary>
 
-Для разработки на основе чекаута. Используйте **Python 3.11–3.14** и **Node.js 22 LTS** для соответствия CI и Docker.
+Для разработки на основе чекаута. Используйте **Python 3.11–3.14** и **Node.js 24 LTS** для соответствия CI и Docker.
 
 ```bash
 git clone https://github.com/HKUDS/DeepTutor.git
