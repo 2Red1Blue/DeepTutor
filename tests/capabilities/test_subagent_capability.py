@@ -264,6 +264,33 @@ async def test_consult_budget_is_authoritative(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_backend_exception_result_keeps_native_provenance(monkeypatch) -> None:
+    class _FailingBackend(_FakeBackend):
+        kind = "codex"
+
+        async def consult(self, *_args, **_kwargs):
+            raise RuntimeError("backend unavailable")
+
+    backend = _FailingBackend()
+    monkeypatch.setattr("deeptutor.services.subagent.access.get_backend", lambda _kind: backend)
+    tool = ConsultSubagentTool()
+    state: dict = {"count": 0, "session_id": None, "name": "myagent"}
+    spec = _spec(state)
+    spec["kind"] = "codex"
+
+    result = await tool.execute(question="Q1", _subagent=spec)
+
+    assert result.success is False
+    assert result.metadata["execution_profile"] == "native"
+    assert result.metadata["provenance"] == {
+        "execution_profile": "native",
+        "runtime_owner": "deeptutor",
+        "backend_kind": "codex",
+        "managed_receipt": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_consult_without_spec_is_graceful() -> None:
     res = await ConsultSubagentTool().execute(question="hi")
     assert res.success is False and "no subagent" in res.content.lower()

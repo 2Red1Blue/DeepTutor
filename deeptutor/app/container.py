@@ -106,6 +106,15 @@ class ApplicationContainer:
         settings = CoordinationSettings.from_runtime_settings(
             load_system_settings(), load_integrations_settings()
         )
+        from deeptutor.services.subagent import (
+            ConnectedAgentConfigurationError,
+            assert_connected_agent_worker_configuration,
+        )
+
+        try:
+            assert_connected_agent_worker_configuration(settings.backend_workers)
+        except ConnectedAgentConfigurationError as exc:
+            raise RuntimeConfigurationError(str(exc)) from exc
         coordinator: RuntimeCoordinator
         if settings.backend == "redis":
             coordinator = RedisCoordinator(

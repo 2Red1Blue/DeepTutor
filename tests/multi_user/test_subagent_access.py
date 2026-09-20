@@ -10,7 +10,7 @@ import pytest
 from deeptutor.multi_user.grants import save_grant
 from deeptutor.multi_user.subagent_access import allowed_subagent_backends
 from deeptutor.services.subagent import access
-from deeptutor.services.subagent.config import BackendConfig
+from deeptutor.services.subagent.config import BackendConfig, SubagentSettings
 
 
 @pytest.fixture
@@ -56,6 +56,42 @@ def test_disabled_backend_is_rejected_at_execution_resolution(monkeypatch) -> No
     with pytest.raises(access.SubagentResolutionError, match="disabled") as excinfo:
         access.resolve_backend_execution("codex", cwd="/workspace")
     assert excinfo.value.forbidden is True
+
+
+def test_multi_worker_startup_rejects_any_enabled_deployment_backend(monkeypatch) -> None:
+    monkeypatch.setattr(access, "list_backend_kinds", lambda: ["codex", "partner"])
+    monkeypatch.setattr(
+        access,
+        "load_subagent_settings",
+        lambda: SubagentSettings(backends={"codex": BackendConfig(enabled=True)}),
+    )
+
+    with pytest.raises(access.ConnectedAgentConfigurationError, match="enabled: codex"):
+        access.assert_connected_agent_worker_configuration(2)
+
+
+def test_multi_worker_startup_allows_every_deployment_backend_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(access, "list_backend_kinds", lambda: ["codex", "partner"])
+    monkeypatch.setattr(
+        access,
+        "load_subagent_settings",
+        lambda: SubagentSettings(backends={"codex": BackendConfig(enabled=False)}),
+    )
+
+    access.assert_connected_agent_worker_configuration(2)
+
+
+def test_multi_worker_execution_fails_closed_if_startup_was_bypassed(monkeypatch) -> None:
+    backend = SimpleNamespace(kind="partner", local_cli=False)
+    monkeypatch.setattr(access, "get_backend", lambda _kind: backend)
+    monkeypatch.setattr(
+        "deeptutor.services.config.load_system_settings",
+        lambda: {"backend_workers": 2},
+    )
+
+    with pytest.raises(access.SubagentResolutionError) as excinfo:
+        access.resolve_backend_execution("partner", require_workspace=False)
+    assert excinfo.value.code == "multi_worker_unsupported"
 
 
 def test_ungranted_backend_is_rejected_before_workspace_resolution(monkeypatch) -> None:

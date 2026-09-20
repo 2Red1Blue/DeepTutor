@@ -181,7 +181,16 @@ class ConsultSubagentTool(BaseTool):
             )
         except Exception as exc:  # pragma: no cover - defensive: surface, don't crash the turn
             logger.warning("consult_subagent failed: %s", exc, exc_info=True)
-            return ToolResult(content=f"The subagent run failed: {exc}", success=False)
+            return ToolResult(
+                content=f"The subagent run failed: {exc}",
+                success=False,
+                metadata={
+                    "subagent_kind": backend.kind,
+                    "consult_index": consult_index,
+                    "execution_profile": "native",
+                    "provenance": provenance,
+                },
+            )
         finally:
             if image_dir is not None:
                 import shutil

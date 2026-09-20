@@ -72,6 +72,15 @@ def main() -> None:
         "on",
     }
     backend_workers = max(1, int(load_system_settings().get("backend_workers") or 1))
+    from deeptutor.services.subagent import (
+        ConnectedAgentConfigurationError,
+        assert_connected_agent_worker_configuration,
+    )
+
+    try:
+        assert_connected_agent_worker_configuration(backend_workers)
+    except ConnectedAgentConfigurationError as exc:
+        raise SystemExit(str(exc)) from exc
     if dev_reload and backend_workers > 1:
         raise SystemExit(
             "Development reload and backend_workers > 1 are mutually exclusive. "

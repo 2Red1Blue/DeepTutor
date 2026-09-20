@@ -409,3 +409,36 @@ def test_settings_put_merges_per_field_and_backend(client):
     body = r4.json()
     assert body["consult_budget"] == 7
     assert body["backends"]["claude_code"]["model"] == "opus"
+
+
+def test_settings_get_returns_only_safe_projection_to_ordinary_user(client, monkeypatch) -> None:
+    saved = client.put(
+        "/api/subagents/settings",
+        json={
+            "consult_budget": 7,
+            "backends": {
+                "hermes_remote": {
+                    "base_url": "https://private.internal",
+                    "api_key_env": "SECRET_ENV",
+                    "profile": "production",
+                    "system_prompt": "deployment-only instruction",
+                    "extra_args": ["--operator-flag"],
+                }
+            },
+        },
+    )
+    assert saved.status_code == 200
+    monkeypatch.setattr(
+        subagents_module,
+        "get_current_user",
+        lambda: SimpleNamespace(is_admin=False),
+    )
+
+    response = client.get("/api/subagents/settings")
+
+    assert response.status_code == 200
+    assert response.json() == {"consult_budget": 7, "backends": {}}
+    serialized = response.text
+    assert "private.internal" not in serialized
+    assert "SECRET_ENV" not in serialized
+    assert "deployment-only instruction" not in serialized

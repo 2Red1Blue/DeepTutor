@@ -14,9 +14,12 @@ through the consult tool and the API.
 from __future__ import annotations
 
 from deeptutor.services.subagent.access import (
+    ConnectedAgentConfigurationError,
     ResolvedSubagent,
     SubagentResolutionError,
+    assert_connected_agent_worker_configuration,
     backend_available_to_current_user,
+    enabled_deployment_backend_kinds,
     executable_backend_kinds,
     native_execution_provenance,
     resolve_backend_execution,
@@ -45,6 +48,7 @@ from deeptutor.services.subagent.types import (
 __all__ = [
     "OnEvent",
     "SubagentBackend",
+    "ConnectedAgentConfigurationError",
     "ResolvedSubagent",
     "SubagentResolutionError",
     "BackendConfig",
@@ -60,7 +64,9 @@ __all__ = [
     "detect_all",
     "get_backend",
     "list_backend_kinds",
+    "assert_connected_agent_worker_configuration",
     "backend_available_to_current_user",
+    "enabled_deployment_backend_kinds",
     "executable_backend_kinds",
     "native_execution_provenance",
     "resolve_backend_execution",

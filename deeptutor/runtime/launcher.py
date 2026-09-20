@@ -1296,6 +1296,15 @@ def start(
     ensure_runtime_settings_files()
     settings = load_launch_settings(runtime_home)
     backend_workers = max(1, int(load_system_settings().get("backend_workers") or 1))
+    from deeptutor.services.subagent import (
+        ConnectedAgentConfigurationError,
+        assert_connected_agent_worker_configuration,
+    )
+
+    try:
+        assert_connected_agent_worker_configuration(backend_workers)
+    except ConnectedAgentConfigurationError as exc:
+        raise SystemExit(str(exc)) from exc
     runtime_env = export_runtime_settings_to_env(overwrite=True)
     auth_enabled = bool(load_auth_settings()["enabled"])
 

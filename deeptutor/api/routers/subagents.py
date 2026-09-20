@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from deeptutor.api.routers.auth import require_admin
 from deeptutor.knowledge.kb_types import SUBAGENT_KB_TYPE
+from deeptutor.multi_user.context import get_current_user
 from deeptutor.multi_user.knowledge_access import current_kb_manager
 from deeptutor.multi_user.partner_access import assert_partner_allowed, visible_partner_cards
 from deeptutor.services.subagent import (
@@ -342,8 +343,11 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
 
 @router.get("/settings")
 async def get_settings():
-    """Read the consult budget and per-backend run config."""
-    return load_subagent_settings().to_dict()
+    """Read public turn policy or the admin deployment-backend config."""
+    settings = load_subagent_settings()
+    if not get_current_user().is_admin:
+        return {"consult_budget": settings.consult_budget, "backends": {}}
+    return settings.to_dict()
 
 
 @router.put("/settings", dependencies=[Depends(require_admin)])

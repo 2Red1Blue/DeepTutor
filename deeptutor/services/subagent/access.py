@@ -12,6 +12,10 @@ from deeptutor.services.subagent.partner import PARTNER_BACKEND_KIND
 from deeptutor.services.subagent.registry import get_backend, list_backend_kinds
 
 
+class ConnectedAgentConfigurationError(ValueError):
+    """The deployment cannot safely execute Connected Agent backends."""
+
+
 class SubagentResolutionError(ValueError):
     """A backend cannot execute under the current account and workspace."""
 
@@ -70,6 +74,56 @@ def executable_backend_kinds() -> set[str]:
     return candidates
 
 
+def enabled_deployment_backend_kinds() -> set[str]:
+    """Return enabled deployment backends governed by ``subagent.json``.
+
+    Partner execution has its own authorization and no deployment-backend
+    toggle, so it is fenced at invocation time instead of participating in the
+    startup configuration check.
+    """
+
+    settings = load_subagent_settings()
+    return {
+        kind
+        for kind in list_backend_kinds()
+        if kind != PARTNER_BACKEND_KIND and settings.backend(kind).enabled
+    }
+
+
+def assert_connected_agent_worker_configuration(backend_workers: int) -> None:
+    """Reject multi-worker startup while a native backend is enabled.
+
+    The session registry is process-local and has no distributed lease. Redis
+    turn coordination therefore does not make Connected Agent session resume
+    safe across API workers.
+    """
+
+    workers = max(1, int(backend_workers))
+    if workers <= 1:
+        return
+    enabled = sorted(enabled_deployment_backend_kinds())
+    if not enabled:
+        return
+    raise ConnectedAgentConfigurationError(
+        "backend_workers > 1 requires every Connected Agent backend to be disabled "
+        "until the backend-session registry has a distributed lease; enabled: " + ", ".join(enabled)
+    )
+
+
+def _assert_single_worker_execution() -> None:
+    """Fence every native invocation even when startup validation was bypassed."""
+
+    from deeptutor.services.config import load_system_settings
+
+    workers = max(1, int(load_system_settings().get("backend_workers") or 1))
+    if workers > 1:
+        raise SubagentResolutionError(
+            "multi_worker_unsupported",
+            "Connected Agents are unavailable when backend_workers > 1 until their "
+            "backend-session registry has a distributed lease.",
+        )
+
+
 def resolve_backend_execution(
     kind: str, *, cwd: str = "", require_workspace: bool = True
 ) -> ResolvedSubagent:
@@ -86,6 +140,7 @@ def resolve_backend_execution(
     backend = get_backend(normalized)
     if backend is None:
         raise SubagentResolutionError("unknown_backend", f"Unknown agent kind: {normalized!r}")
+    _assert_single_worker_execution()
     if normalized == PARTNER_BACKEND_KIND:
         return ResolvedSubagent(backend=backend, config=BackendConfig(), cwd="")
     if not subagent_backend_allowed(normalized):
@@ -140,9 +195,12 @@ def _resolve_owner_workspace_cwd(raw_cwd: str) -> str:
 
 
 __all__ = [
+    "ConnectedAgentConfigurationError",
     "ResolvedSubagent",
     "SubagentResolutionError",
+    "assert_connected_agent_worker_configuration",
     "backend_available_to_current_user",
+    "enabled_deployment_backend_kinds",
     "executable_backend_kinds",
     "native_execution_provenance",
     "resolve_backend_execution",

@@ -39,3 +39,29 @@ def test_runtime_report_never_exposes_redis_credentials() -> None:
     assert report["redis_configured"] is True
     assert "secret" not in repr(report)
     assert "redis_url" not in report
+
+
+def test_application_container_rejects_enabled_connected_agents_with_multiple_workers(
+    monkeypatch,
+) -> None:
+    from deeptutor.app import container as container_module
+    from deeptutor.services.subagent import access as subagent_access
+
+    monkeypatch.setattr(
+        container_module,
+        "load_system_settings",
+        lambda: {"backend_workers": 2},
+    )
+    monkeypatch.setattr(
+        container_module,
+        "load_integrations_settings",
+        lambda: {"turn_coordination": {"backend": "redis", "redis_url": "redis://test"}},
+    )
+    monkeypatch.setattr(
+        subagent_access,
+        "enabled_deployment_backend_kinds",
+        lambda: {"codex"},
+    )
+
+    with pytest.raises(RuntimeConfigurationError, match="Connected Agent backend"):
+        container_module.ApplicationContainer.build()
