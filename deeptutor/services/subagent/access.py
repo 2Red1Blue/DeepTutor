@@ -11,6 +11,9 @@ from deeptutor.services.subagent.config import BackendConfig, load_subagent_sett
 from deeptutor.services.subagent.partner import PARTNER_BACKEND_KIND
 from deeptutor.services.subagent.registry import get_backend, list_backend_kinds
 
+PARTNER_GROUP_BACKEND_KIND = "partner_group"
+_CONTEXT_BACKEND_KINDS = {PARTNER_BACKEND_KIND, PARTNER_GROUP_BACKEND_KIND}
+
 
 class ConnectedAgentConfigurationError(ValueError):
     """The deployment cannot safely execute Connected Agent backends."""
@@ -56,8 +59,8 @@ def backend_available_to_current_user(kind: str) -> bool:
     """Whether discovery/configuration may expose one deployment backend."""
 
     normalized = str(kind or "").strip()
-    if not normalized or normalized == PARTNER_BACKEND_KIND:
-        return normalized == PARTNER_BACKEND_KIND
+    if not normalized or normalized in _CONTEXT_BACKEND_KINDS:
+        return normalized in _CONTEXT_BACKEND_KINDS
     if not subagent_backend_allowed(normalized):
         return False
     return load_subagent_settings().backend(normalized).enabled
@@ -69,7 +72,7 @@ def executable_backend_kinds() -> set[str]:
     candidates = {
         kind
         for kind in list_backend_kinds()
-        if kind != PARTNER_BACKEND_KIND and backend_available_to_current_user(kind)
+        if kind not in _CONTEXT_BACKEND_KINDS and backend_available_to_current_user(kind)
     }
     return candidates
 
@@ -86,7 +89,7 @@ def enabled_deployment_backend_kinds() -> set[str]:
     return {
         kind
         for kind in list_backend_kinds()
-        if kind != PARTNER_BACKEND_KIND and settings.backend(kind).enabled
+        if kind not in _CONTEXT_BACKEND_KINDS and settings.backend(kind).enabled
     }
 
 
@@ -134,7 +137,11 @@ def _assert_single_worker_execution() -> None:
 
 
 def resolve_backend_execution(
-    kind: str, *, cwd: str = "", require_workspace: bool = True
+    kind: str,
+    *,
+    cwd: str = "",
+    require_workspace: bool = True,
+    target_id: str = "",
 ) -> ResolvedSubagent:
     """Authorize and resolve one native Connected Agent invocation.
 
@@ -146,11 +153,34 @@ def resolve_backend_execution(
     """
 
     normalized = str(kind or "").strip()
-    backend = get_backend(normalized)
+    backend = _context_backend(normalized) or get_backend(normalized)
     if backend is None:
         raise SubagentResolutionError("unknown_backend", f"Unknown agent kind: {normalized!r}")
     _assert_single_worker_execution()
     if normalized == PARTNER_BACKEND_KIND:
+        partner_id = str(target_id or "").strip()
+        if partner_id:
+            from deeptutor.multi_user.partner_access import assert_partner_allowed
+
+            try:
+                assert_partner_allowed(partner_id)
+            except Exception as exc:
+                detail = getattr(exc, "detail", None) or str(exc)
+                raise SubagentResolutionError(
+                    "target_not_granted", str(detail), forbidden=True
+                ) from exc
+        return ResolvedSubagent(backend=backend, config=BackendConfig(), cwd="")
+    if normalized == PARTNER_GROUP_BACKEND_KIND:
+        group_id = str(target_id or "").strip()
+        if group_id:
+            from deeptutor.services.partner_groups.manager import get_partner_group_manager
+
+            if get_partner_group_manager().get_group(group_id) is None:
+                raise SubagentResolutionError(
+                    "target_not_granted",
+                    "Partner Group is unavailable.",
+                    forbidden=True,
+                )
         return ResolvedSubagent(backend=backend, config=BackendConfig(), cwd="")
     if not subagent_backend_allowed(normalized):
         raise SubagentResolutionError(
@@ -171,6 +201,20 @@ def resolve_backend_execution(
         else ""
     )
     return ResolvedSubagent(backend=backend, config=config, cwd=resolved_cwd)
+
+
+def _context_backend(kind: str) -> SubagentBackend | None:
+    """Construct an in-process backend selected by a turn, not the connect UI."""
+
+    if kind == PARTNER_BACKEND_KIND:
+        from deeptutor.services.subagent.partner import PartnerBackend
+
+        return PartnerBackend()
+    if kind == PARTNER_GROUP_BACKEND_KIND:
+        from deeptutor.services.subagent.partner_group import PartnerGroupBackend
+
+        return PartnerGroupBackend()
+    return None
 
 
 def _resolve_owner_workspace_cwd(raw_cwd: str) -> str:
@@ -205,6 +249,7 @@ def _resolve_owner_workspace_cwd(raw_cwd: str) -> str:
 
 __all__ = [
     "ConnectedAgentConfigurationError",
+    "PARTNER_GROUP_BACKEND_KIND",
     "ResolvedSubagent",
     "SubagentResolutionError",
     "assert_connected_agent_worker_configuration",

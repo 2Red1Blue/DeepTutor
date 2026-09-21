@@ -81,7 +81,7 @@ class ConsultSubagentTool(BaseTool):
                 content="No subagent is connected on this turn; consult_subagent is unavailable.",
                 success=False,
             )
-        question = str(kwargs.get("question") or "").strip()
+        question = str(spec.get("original_question") or kwargs.get("question") or "").strip()
         if not question:
             return ToolResult(
                 content="consult_subagent needs a non-empty 'question'.", success=False
@@ -111,7 +111,9 @@ class ConsultSubagentTool(BaseTool):
 
         try:
             resolved = resolve_backend_execution(
-                str(spec.get("kind") or ""), cwd=str(spec.get("cwd") or "")
+                str(spec.get("kind") or ""),
+                cwd=str(spec.get("cwd") or ""),
+                target_id=str(spec.get("partner_id") or ""),
             )
         except SubagentResolutionError as exc:
             return ToolResult(
@@ -148,11 +150,22 @@ class ConsultSubagentTool(BaseTool):
                 "execution_profile": "native",
                 "provenance": provenance,
             }
+            extra_values = extra or {}
+            for key in (
+                "partner_group_id",
+                "partner_group_session_key",
+                "partner_id",
+                "partner_session_key",
+                "partner_group_consultation_status",
+                "partner_group_idle_seconds",
+            ):
+                if key in extra_values:
+                    metadata[key] = extra_values[key]
             # ``merge_id`` correlates a backend's start/finish (a web search) or
             # streaming deltas (the answer typing out) into one evolving row.
             # Namespace it by consult round so ids stay unique across the turn's
             # several consults (which share one transcript).
-            merge_id = (extra or {}).get("merge_id")
+            merge_id = extra_values.get("merge_id")
             if merge_id:
                 metadata["subagent_merge_id"] = f"{consult_index}:{merge_id}"
             await event_sink(_TRACE_KIND, text, metadata)
@@ -170,17 +183,24 @@ class ConsultSubagentTool(BaseTool):
         await _stream("question", question)
 
         try:
-            result = await backend.consult(
+            from deeptutor.services.subagent.execution import consult_with_session_guard
+
+            result, _execution_key = await consult_with_session_guard(
+                backend,
                 question,
                 on_event=on_event,
-                cwd=resolved.cwd or None,
-                session_id=state.get("session_id"),
+                cwd=resolved.cwd,
                 config=run_config,
+                chat_session_id=str(spec.get("chat_session_id") or ""),
+                connection=str(spec.get("connection") or name),
+                session_key_value=str(spec.get("session_key") or ""),
+                state=state,
                 images=image_paths or None,
                 partner_id=spec.get("partner_id") or None,
             )
         except Exception as exc:  # pragma: no cover - defensive: surface, don't crash the turn
             logger.warning("consult_subagent failed: %s", exc, exc_info=True)
+            await _stream("error", str(exc))
             return ToolResult(
                 content=f"The subagent run failed: {exc}",
                 success=False,
@@ -197,21 +217,6 @@ class ConsultSubagentTool(BaseTool):
 
                 shutil.rmtree(image_dir, ignore_errors=True)
 
-        if result.session_id:
-            state["session_id"] = result.session_id
-            # Remember it across turns so the next turn (and the sidebar) resume
-            # this same live agent session.
-            session_key_value = spec.get("session_key")
-            if session_key_value:
-                from deeptutor.services.subagent.sessions import remember_session
-
-                remember_session(
-                    str(session_key_value),
-                    result.session_id,
-                    kind=backend.kind,
-                    cwd=resolved.cwd,
-                )
-
         remaining = max(0, budget - consult_index)
         metadata = {
             "subagent_kind": backend.kind,
@@ -223,6 +228,7 @@ class ConsultSubagentTool(BaseTool):
         }
         if not result.final_text:
             detail = result.error or "the agent produced no final answer text"
+            await _stream("error", detail)
             return ToolResult(
                 content=f"[The agent returned no answer: {detail}]",
                 success=False,

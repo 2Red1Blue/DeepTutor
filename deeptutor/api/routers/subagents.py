@@ -26,12 +26,11 @@ from deeptutor.api.routers.auth import require_admin
 from deeptutor.knowledge.kb_types import SUBAGENT_KB_TYPE
 from deeptutor.multi_user.context import get_current_user
 from deeptutor.multi_user.knowledge_access import current_kb_manager
-from deeptutor.multi_user.partner_access import assert_partner_allowed, visible_partner_cards
 from deeptutor.services.subagent import (
-    PARTNER_BACKEND_KIND,
     SubagentResolutionError,
     detect_all,
     executable_backend_kinds,
+    list_backend_kinds,
     load_subagent_settings,
     native_execution_provenance,
     resolve_backend_execution,
@@ -47,9 +46,6 @@ class ConnectSubagentRequest(BaseModel):
     name: str
     agent_kind: str
     cwd: str = ""
-    # For the partner backend (``agent_kind == "partner"``): which partner to
-    # consult. Ignored by local and remote agent backends.
-    partner_id: str = ""
 
 
 class SubagentSettingsPayload(BaseModel):
@@ -102,18 +98,6 @@ async def sync_backend(kind: str):
     return options.to_dict()
 
 
-@router.get("/partners")
-async def list_visible_partners():
-    """Partners the current user can connect & consult.
-
-    Returns every partner for an admin, or just the ones an admin has assigned
-    for a non-admin. The partner CRUD API (``/api/partners``) stays fully
-    admin-gated; this is the read surface the connect flow and the partner list
-    page use, so a non-admin sees their assigned partners without a 403.
-    """
-    return {"partners": visible_partner_cards()}
-
-
 @router.get("/connections")
 async def list_connections():
     """List the current user's connected subagents."""
@@ -122,6 +106,8 @@ async def list_connections():
     for name in manager.list_knowledge_bases():
         meta = manager.get_metadata(name)
         if not isinstance(meta, dict) or meta.get("type") != SUBAGENT_KB_TYPE:
+            continue
+        if meta.get("agent_kind") == "partner":
             continue
         connections.append(
             {
@@ -141,46 +127,22 @@ async def list_connections():
 
 @router.post("/connections")
 async def create_connection(payload: ConnectSubagentRequest):
-    """Connect a local, remote, or Partner subagent as a selectable KB.
-
-    A partner connection (``agent_kind == "partner"``) binds a ``partner_id``
-    instead of a working directory: consulting it opens a fresh session on that
-    partner, exactly as if the user started one from the partner page. Every
-    consult within one DeepTutor chat lands in that one partner session.
-    """
+    """Connect a local or remote subagent as a selectable KB."""
     name = (payload.name or "").strip()
     agent_kind = (payload.agent_kind or "").strip()
     if not name or not agent_kind:
         raise HTTPException(status_code=400, detail="Both name and agent_kind are required.")
-    resolved_cwd = ""
-    partner_id = ""
-    if agent_kind == PARTNER_BACKEND_KIND:
-        partner_id = (payload.partner_id or "").strip()
-        if not partner_id:
-            raise HTTPException(
-                status_code=400, detail="A partner_id is required to connect a partner."
-            )
-        # Partners are admin-managed, but an admin can assign one to a user via
-        # the grant system. An admin may connect any partner; a non-admin only a
-        # partner assigned to them (403 otherwise). The partner still runs in its
-        # own isolated scope — connecting just lets the user consult it in chat.
-        assert_partner_allowed(partner_id)
-        from deeptutor.services.partners import get_partner_manager
-
-        if not get_partner_manager().partner_exists(partner_id):
-            raise HTTPException(status_code=400, detail=f"No partner named {partner_id!r}.")
-    else:
-        try:
-            resolved = resolve_backend_execution(agent_kind, cwd=payload.cwd)
-        except SubagentResolutionError as exc:
-            _raise_resolution_error(exc)
-        resolved_cwd = resolved.cwd
+    if agent_kind not in list_backend_kinds():
+        raise HTTPException(status_code=400, detail=f"Unknown agent kind: {agent_kind!r}")
+    try:
+        resolved = resolve_backend_execution(agent_kind, cwd=payload.cwd)
+    except SubagentResolutionError as exc:
+        _raise_resolution_error(exc)
+    resolved_cwd = resolved.cwd
 
     try:
         manager = current_kb_manager()
-        entry = manager.register_subagent_connection(
-            name, agent_kind, cwd=resolved_cwd, partner_id=partner_id
-        )
+        entry = manager.register_subagent_connection(name, agent_kind, cwd=resolved_cwd)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - defensive
@@ -240,7 +202,8 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
     if not isinstance(meta, dict) or meta.get("type") != SUBAGENT_KB_TYPE:
         raise HTTPException(status_code=404, detail=f"No connected subagent named {name!r}.")
 
-    from deeptutor.services.subagent.sessions import get_session, remember_session, session_key
+    from deeptutor.services.subagent.execution import consult_with_session_guard
+    from deeptutor.services.subagent.sessions import session_key
 
     kind = str(meta.get("agent_kind") or "")
     cwd = str(meta.get("cwd") or "")
@@ -254,7 +217,6 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
     cwd = resolved.cwd
     provenance = resolved.provenance
     skey = session_key(payload.chat_session_id, name) if payload.chat_session_id else ""
-    resume_id = get_session(skey) if skey else None
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
@@ -264,12 +226,15 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
 
         async def run() -> None:
             try:
-                res = await backend.consult(
+                res, _execution_key = await consult_with_session_guard(
+                    backend,
                     message,
                     on_event=on_event,
-                    cwd=cwd or None,
-                    session_id=resume_id,
+                    cwd=cwd,
                     config=config,
+                    chat_session_id=payload.chat_session_id,
+                    connection=name,
+                    session_key_value=skey,
                     partner_id=partner_id or None,
                 )
                 await queue.put(("done", res))
@@ -303,8 +268,6 @@ async def message_connection(name: str, payload: SubagentMessageRequest):
                         line["merge_id"] = f"side:{merge_id}"
                     yield _ndjson(line)
                 elif kind_ == "done":
-                    if skey and item.session_id:
-                        remember_session(skey, item.session_id, kind=kind, cwd=cwd)
                     yield _ndjson(
                         {
                             "done": True,

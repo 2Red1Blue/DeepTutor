@@ -94,7 +94,7 @@ def test_multi_worker_execution_fails_closed_if_startup_was_bypassed(monkeypatch
     assert excinfo.value.code == "multi_worker_unsupported"
 
 
-@pytest.mark.parametrize("kind", ["codex", "partner"])
+@pytest.mark.parametrize("kind", ["codex", "partner", "partner_group"])
 def test_competing_process_blocks_deployment_and_partner_backends(kind: str, monkeypatch) -> None:
     from deeptutor.services.subagent import process_ownership
 
@@ -118,6 +118,30 @@ def test_competing_process_blocks_deployment_and_partner_backends(kind: str, mon
         access.resolve_backend_execution(kind, require_workspace=False)
     assert excinfo.value.code == "multi_worker_unsupported"
     assert excinfo.value.detail == "owned elsewhere"
+
+
+def test_partner_group_uses_owner_scope_and_native_provenance(monkeypatch) -> None:
+    group = SimpleNamespace(group_id="study-group")
+    monkeypatch.setattr(access, "_assert_single_worker_execution", lambda: None)
+    monkeypatch.setattr(
+        "deeptutor.services.partner_groups.manager.get_partner_group_manager",
+        lambda: SimpleNamespace(
+            get_group=lambda group_id: group if group_id == group.group_id else None
+        ),
+    )
+
+    resolved = access.resolve_backend_execution("partner_group", target_id="study-group")
+    assert resolved.backend.kind == "partner_group"
+    assert resolved.provenance == {
+        "execution_profile": "native",
+        "runtime_owner": "deeptutor",
+        "backend_kind": "partner_group",
+        "managed_receipt": False,
+    }
+
+    with pytest.raises(access.SubagentResolutionError) as excinfo:
+        access.resolve_backend_execution("partner_group", target_id="other-owner-group")
+    assert excinfo.value.code == "target_not_granted"
 
 
 def test_ungranted_backend_is_rejected_before_workspace_resolution(monkeypatch) -> None:

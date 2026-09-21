@@ -84,7 +84,11 @@ class ConnectedAgentProcessOwnership:
                 handle.write(b"\0")
                 handle.flush()
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            msvcrt.locking(  # type: ignore[attr-defined]
+                handle.fileno(),
+                msvcrt.LK_NBLCK,  # type: ignore[attr-defined]
+                1,
+            )
             return
 
         import fcntl
@@ -97,7 +101,11 @@ class ConnectedAgentProcessOwnership:
             import msvcrt
 
             handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            msvcrt.locking(  # type: ignore[attr-defined]
+                handle.fileno(),
+                msvcrt.LK_UNLCK,  # type: ignore[attr-defined]
+                1,
+            )
             return
 
         import fcntl

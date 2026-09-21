@@ -14,6 +14,7 @@ through the consult tool and the API.
 from __future__ import annotations
 
 from deeptutor.services.subagent.access import (
+    PARTNER_GROUP_BACKEND_KIND,
     ConnectedAgentConfigurationError,
     ResolvedSubagent,
     SubagentResolutionError,
@@ -49,6 +50,7 @@ __all__ = [
     "OnEvent",
     "SubagentBackend",
     "ConnectedAgentConfigurationError",
+    "PARTNER_GROUP_BACKEND_KIND",
     "ResolvedSubagent",
     "SubagentResolutionError",
     "BackendConfig",

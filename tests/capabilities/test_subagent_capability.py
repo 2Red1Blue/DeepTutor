@@ -321,12 +321,58 @@ async def test_session_id_persists_across_turns(monkeypatch, tmp_path) -> None:
     await tool.execute(question="Q1", _subagent=spec1, event_sink=sink)
     assert sess.get_session(sess.session_key("chatA", "myagent")) == "sess-1"
 
-    # Turn 2 (fresh context): augment_kwargs seeds the remembered session.
+    # Turn 2 (fresh context): the guard loads the remembered session only after
+    # it owns the execution key, then resumes it.
     ctx2 = UnifiedContext(user_message="more", knowledge_bases=["myagent"], session_id="chatA")
     spec2 = cap.augment_kwargs("consult_subagent", {"question": "Q2"}, ctx2)["_subagent"]
-    assert spec2["state"]["session_id"] == "sess-1"
+    assert spec2["state"]["session_id"] is None
+    await tool.execute(question="Q2", _subagent=spec2, event_sink=sink)
+    assert backend.calls[-1] == ("Q2", "sess-1")
 
     # A different chat session does not inherit the agent session.
     ctx3 = UnifiedContext(user_message="hi", knowledge_bases=["myagent"], session_id="chatB")
     spec3 = cap.augment_kwargs("consult_subagent", {"question": "Q"}, ctx3)["_subagent"]
     assert spec3["state"]["session_id"] is None
+
+
+def test_group_selection_requires_discussion_and_uses_stable_identity(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "deeptutor.services.partner_groups.manager.get_partner_group_manager",
+        lambda: SimpleNamespace(get_group=lambda _id: SimpleNamespace(name="Study panel")),
+    )
+    context = UnifiedContext(
+        user_message="Original question",
+        runtime=TurnRuntimeContext(partner_discussion_group_id="group-1"),
+    )
+    cap = SubagentCapability()
+    assert cap.is_active(context)
+    assert "MUST" in cap.system_block(context, language="en", prompts={}).content
+    assert cap.finish_instruction(context, "An answer without discussion")
+    spec = cap.augment_kwargs("consult_subagent", {}, context)["_subagent"]
+    assert spec["kind"] == "partner_group"
+    assert spec["partner_id"] == "group-1"
+    assert spec["budget"] == 1
+    assert spec["original_question"] == "Original question"
+    spec["state"]["count"] = 1
+    assert not cap.finish_instruction(context, "Synthesis")
+
+
+def test_partner_selected_directly_without_connection_kb(monkeypatch):
+    monkeypatch.setattr(
+        "deeptutor.multi_user.partner_access.visible_partner_cards",
+        lambda: [{"partner_id": "panda", "name": "Panda"}],
+    )
+    context = UnifiedContext(
+        user_message="Question", runtime=TurnRuntimeContext(consult_partner_id="panda")
+    )
+    conn = connection_for_turn(context)
+    assert conn == {"name": "Panda", "kind": "partner", "partner_id": "panda", "cwd": ""}
+    assert SubagentCapability().finish_instruction(context, "Must consult first")
+
+
+def test_legacy_partner_kb_is_not_a_subagent_selection(monkeypatch):
+    _bind(monkeypatch, kind="partner")
+    context = UnifiedContext(user_message="hi", knowledge_bases=["myagent"])
+    assert not SubagentCapability().is_active(context)
