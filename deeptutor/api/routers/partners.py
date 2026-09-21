@@ -634,14 +634,20 @@ async def list_partners():
 @router.get("/consultation-session")
 async def get_partner_consultation_session(chat_session_id: str, partner_name: str):
     """Recover native identity for older consultation traces in this user's registry."""
-    from deeptutor.services.subagent.sessions import get_session, session_key
+    from deeptutor.services.subagent.sessions import (
+        connection_incarnation,
+        get_session,
+        session_key,
+    )
 
     matches = []
     for partner in visible_partners():
         if partner.get("name") != partner_name:
             continue
         partner_id = str(partner["partner_id"])
-        native_key = get_session(session_key(chat_session_id, f"partner:{partner_id}"))
+        connection = f"partner:{partner_id}"
+        incarnation = connection_incarnation(connection, kind="partner", cwd="")
+        native_key = get_session(session_key(chat_session_id, connection), incarnation=incarnation)
         if native_key:
             matches.append({"partner_id": partner_id, "session_key": native_key})
     # Never open a different conversation when names are ambiguous.

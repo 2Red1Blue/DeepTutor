@@ -319,7 +319,10 @@ async def test_session_id_persists_across_turns(monkeypatch, tmp_path) -> None:
     spec1 = cap.augment_kwargs("consult_subagent", {"question": "Q1"}, ctx1)["_subagent"]
     assert spec1["state"]["session_id"] is None
     await tool.execute(question="Q1", _subagent=spec1, event_sink=sink)
-    assert sess.get_session(sess.session_key("chatA", "myagent")) == "sess-1"
+    incarnation = sess.connection_incarnation("myagent", kind="claude_code", cwd="/workspace")
+    assert (
+        sess.get_session(sess.session_key("chatA", "myagent"), incarnation=incarnation) == "sess-1"
+    )
 
     # Turn 2 (fresh context): the guard loads the remembered session only after
     # it owns the execution key, then resumes it.

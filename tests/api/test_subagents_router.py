@@ -99,6 +99,10 @@ def client(monkeypatch, tmp_path):
         "deeptutor.services.subagent.config._settings_path",
         lambda: tmp_path / "subagent.json",
     )
+    monkeypatch.setattr(
+        "deeptutor.services.subagent.sessions._path",
+        lambda: tmp_path / "subagent_sessions.json",
+    )
 
     async def fake_detect(*, allowed_kinds=None):
         from deeptutor.services.subagent.types import DetectResult
@@ -142,6 +146,30 @@ def test_connect_list_and_disconnect_roundtrip(client):
     gone = client.delete("/api/subagents/connections/MyClaude")
     assert gone.status_code == 200
     assert client.get("/api/subagents/connections").json()["connections"] == []
+
+
+def test_recreated_connection_gets_a_new_persistent_incarnation(client):
+    from deeptutor.services.subagent import sessions
+
+    first = client.post(
+        "/api/subagents/connections",
+        json={"name": "Agent", "agent_kind": "claude_code", "cwd": "/old"},
+    )
+    assert first.status_code == 200
+    old = sessions.connection_incarnation("Agent", kind="claude_code", cwd="/old")
+    assert sessions.remember_session("chat::Agent", "old-native", incarnation=old) is True
+
+    assert client.delete("/api/subagents/connections/Agent").status_code == 200
+    recreated = client.post(
+        "/api/subagents/connections",
+        json={"name": "Agent", "agent_kind": "codex", "cwd": "/new"},
+    )
+    assert recreated.status_code == 200
+    current = sessions.connection_incarnation("Agent", kind="codex", cwd="/new")
+
+    assert current.value != old.value
+    assert sessions.remember_session("chat::Agent", "late-old", incarnation=old) is False
+    assert sessions.get_session("chat::Agent", incarnation=current) is None
 
 
 def test_connect_rejects_unknown_kind(client):
@@ -267,7 +295,10 @@ def test_message_connection_streams_and_persists(client, monkeypatch, tmp_path):
     # The final line reports the session id, now persisted for the next turn.
     assert lines[-1]["done"] is True and lines[-1]["session_id"] == "sess-9"
     assert lines[-1]["execution_profile"] == "native"
-    assert sess.get_session(sess.session_key("chatA", "MyClaude")) == "sess-9"
+    incarnation = sess.connection_incarnation("MyClaude", kind="claude_code", cwd="/tmp")
+    assert (
+        sess.get_session(sess.session_key("chatA", "MyClaude"), incarnation=incarnation) == "sess-9"
+    )
 
 
 def test_message_connection_unknown_is_404(client):

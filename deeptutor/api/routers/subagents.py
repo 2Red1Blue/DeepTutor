@@ -148,6 +148,14 @@ async def create_connection(payload: ConnectSubagentRequest):
     except Exception as exc:  # pragma: no cover - defensive
         logger.error("Error connecting subagent: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    try:
+        from deeptutor.services.subagent.sessions import activate_connection
+
+        activate_connection(name, kind=agent_kind, cwd=resolved_cwd)
+    except Exception as exc:  # pragma: no cover - durable registry failure
+        manager.delete_knowledge_base(name, confirm=True)
+        logger.error("Error recording connected-agent identity: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return {
         "status": "connected",
@@ -167,15 +175,21 @@ async def delete_connection(name: str):
     meta = manager.get_metadata(name)
     if not isinstance(meta, dict) or meta.get("type") != SUBAGENT_KB_TYPE:
         raise HTTPException(status_code=404, detail=f"No connected subagent named {name!r}.")
+    from deeptutor.services.subagent.sessions import activate_connection, revoke_connection
+
+    kind = str(meta.get("agent_kind") or "")
+    cwd = str(meta.get("cwd") or "")
+    # Revoke before deleting the pointer. A consult that already called the
+    # backend can no longer publish its late native session id after this CAS.
+    revoke_connection(name)
     try:
         manager.delete_knowledge_base(name, confirm=True)
     except Exception as exc:  # pragma: no cover - defensive
+        # The pointer still exists. Restore service under a fresh incarnation;
+        # the failed deletion must not revive any pre-delete native session.
+        activate_connection(name, kind=kind, cwd=cwd)
         logger.error("Error disconnecting subagent: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    # Drop any remembered live-session ids for this connection.
-    from deeptutor.services.subagent.sessions import forget_connection
-
-    forget_connection(name)
     return {"status": "disconnected", "name": name}
 
 

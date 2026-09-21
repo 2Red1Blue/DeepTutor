@@ -9,7 +9,14 @@ import pytest
 from deeptutor.capabilities.subagent.tools import ConsultSubagentTool
 from deeptutor.services.subagent.config import BackendConfig
 from deeptutor.services.subagent.execution import consult_with_session_guard
-from deeptutor.services.subagent.sessions import session_key
+from deeptutor.services.subagent.sessions import (
+    ConnectionIncarnationChanged,
+    activate_connection,
+    connection_incarnation,
+    get_session,
+    revoke_connection,
+    session_key,
+)
 from deeptutor.services.subagent.types import ConsultResult
 
 
@@ -164,3 +171,56 @@ async def test_cancelled_owner_releases_key_for_successor(isolated_sessions) -> 
     assert key.chat_session_id == "chat-a"
     assert key.connection == "Agent"
     assert key.native_session_id == "native-2"
+
+
+@pytest.mark.asyncio
+async def test_recreated_connection_rejects_late_session_commit(isolated_sessions) -> None:
+    """A blocked old consult cannot republish after delete/name reuse."""
+
+    async def noop_event(_event) -> None:
+        return None
+
+    activate_connection("Agent", kind="codex", cwd="/old")
+    old_backend = _BlockingBackend()
+    old = asyncio.create_task(
+        consult_with_session_guard(
+            old_backend,
+            "old",
+            on_event=noop_event,
+            cwd="/old",
+            config=BackendConfig(),
+            chat_session_id="chat-a",
+            connection="Agent",
+            session_key_value=session_key("chat-a", "Agent"),
+        )
+    )
+    assert await asyncio.wait_for(old_backend.entered.get(), timeout=1) is None
+
+    revoke_connection("Agent")
+    new_incarnation = activate_connection("Agent", kind="claude_code", cwd="/new")
+    old_backend.release.set()
+    with pytest.raises(ConnectionIncarnationChanged):
+        await old
+
+    new_backend = _BlockingBackend()
+    new_backend.kind = "claude_code"
+    new_backend.release.set()
+    result, key = await consult_with_session_guard(
+        new_backend,
+        "new",
+        on_event=noop_event,
+        cwd="/new",
+        config=BackendConfig(),
+        chat_session_id="chat-a",
+        connection="Agent",
+        session_key_value=session_key("chat-a", "Agent"),
+    )
+
+    assert result.success is True
+    assert new_backend.calls == [None]
+    assert key.connection_incarnation == new_incarnation.value
+    assert get_session(session_key("chat-a", "Agent"), incarnation=new_incarnation) == "native-1"
+    assert (
+        connection_incarnation("Agent", kind="claude_code", cwd="/new").value
+        == new_incarnation.value
+    )

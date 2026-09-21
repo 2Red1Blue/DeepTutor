@@ -23,6 +23,7 @@ class ExecutionKey:
     chat_session_id: str
     connection: str
     native_session_id: str
+    connection_incarnation: str
 
 
 @dataclass(slots=True)
@@ -79,15 +80,30 @@ async def consult_with_session_guard(
 ) -> tuple[ConsultResult, ExecutionKey]:
     """Load, consult, and persist one backend session under the shared guard."""
 
-    from deeptutor.services.subagent.sessions import get_session, remember_session
+    from deeptutor.services.subagent.sessions import (
+        ConnectionIncarnationChanged,
+        assert_connection_current,
+        connection_incarnation,
+        get_session,
+        remember_session,
+    )
 
     async with execution_guard(
         backend_kind=backend.kind,
         chat_session_id=chat_session_id,
         connection=connection,
     ) as stable_key:
-        persisted = get_session(session_key_value) if session_key_value else None
-        native_session_id = persisted or str((state or {}).get("session_id") or "") or None
+        incarnation = connection_incarnation(connection, kind=backend.kind, cwd=cwd)
+        persisted = (
+            get_session(session_key_value, incarnation=incarnation) if session_key_value else None
+        )
+        state_incarnation = str((state or {}).get("connection_incarnation") or "")
+        state_session_id = (
+            str((state or {}).get("session_id") or "")
+            if not session_key_value and state_incarnation == incarnation.value
+            else ""
+        )
+        native_session_id = persisted or state_session_id or None
         result = await backend.consult(
             question,
             on_event=on_event,
@@ -98,16 +114,28 @@ async def consult_with_session_guard(
             partner_id=partner_id,
         )
         if result.session_id:
-            if state is not None:
-                state["session_id"] = result.session_id
             if session_key_value:
-                remember_session(
+                committed = remember_session(
                     session_key_value,
                     result.session_id,
-                    kind=backend.kind,
-                    cwd=cwd,
+                    incarnation=incarnation,
                 )
-        key = ExecutionKey(*stable_key, native_session_id or result.session_id or "")
+                if not committed:
+                    raise ConnectionIncarnationChanged(
+                        f"Connected Agent {connection!r} was deleted or replaced."
+                    )
+            else:
+                assert_connection_current(incarnation)
+            if state is not None:
+                state["session_id"] = result.session_id
+                state["connection_incarnation"] = incarnation.value
+        else:
+            assert_connection_current(incarnation)
+        key = ExecutionKey(
+            *stable_key,
+            native_session_id or result.session_id or "",
+            incarnation.value,
+        )
         return result, key
 
 

@@ -795,15 +795,21 @@ class TestChatAttachments:
 
 
 @pytest.mark.asyncio
-async def test_legacy_consultation_lookup_requires_unique_visible_registry_match(monkeypatch):
+async def test_legacy_consultation_lookup_requires_unique_visible_registry_match(
+    monkeypatch, tmp_path
+):
     from deeptutor.api.routers import partners as router
     from deeptutor.services.subagent import sessions
+
+    monkeypatch.setattr(sessions, "_path", lambda: tmp_path / "subagent_sessions.json")
 
     monkeypatch.setattr(
         router, "visible_partners", lambda: [{"partner_id": "frank", "name": "Frank"}]
     )
     monkeypatch.setattr(
-        sessions, "get_session", lambda key: "dt-native" if key == "chat::partner:frank" else None
+        sessions,
+        "get_session",
+        lambda key, **_kwargs: "dt-native" if key == "chat::partner:frank" else None,
     )
     assert await router.get_partner_consultation_session("chat", "Frank") == {
         "partner_id": "frank",
@@ -817,5 +823,5 @@ async def test_legacy_consultation_lookup_requires_unique_visible_registry_match
         "visible_partners",
         lambda: [{"partner_id": "one", "name": "Frank"}, {"partner_id": "two", "name": "Frank"}],
     )
-    monkeypatch.setattr(sessions, "get_session", lambda key: "dt-native")
+    monkeypatch.setattr(sessions, "get_session", lambda key, **_kwargs: "dt-native")
     assert await router.get_partner_consultation_session("chat", "Frank") is None

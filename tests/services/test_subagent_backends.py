@@ -10,6 +10,9 @@ to prove the streaming primitive surfaces stdout/stderr in order with an exit.
 from __future__ import annotations
 
 import sys
+import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -817,20 +820,82 @@ def test_session_registry_roundtrip(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(sess, "_path", lambda: tmp_path / "subagent_sessions.json")
     key = sess.session_key("chat1", "agentX")
-    assert sess.get_session(key) is None
+    incarnation = sess.activate_connection("agentX", kind="codex", cwd="/p")
+    other_incarnation = sess.activate_connection("other", kind="codex", cwd="")
+    assert sess.get_session(key, incarnation=incarnation) is None
 
-    sess.remember_session(key, "sid-9", kind="codex", cwd="/p")
-    sess.remember_session("chat1::other", "sid-2")
-    assert sess.get_session(key) == "sid-9"
+    assert sess.remember_session(key, "sid-9", incarnation=incarnation) is True
+    assert sess.remember_session("chat1::other", "sid-2", incarnation=other_incarnation) is True
+    assert sess.get_session(key, incarnation=incarnation) == "sid-9"
 
     # Disconnecting agentX drops only its sessions.
-    sess.forget_connection("agentX")
-    assert sess.get_session(key) is None
-    assert sess.get_session("chat1::other") == "sid-2"
+    sess.revoke_connection("agentX")
+    assert sess.get_session(key, incarnation=incarnation) is None
+    assert sess.get_session("chat1::other", incarnation=other_incarnation) == "sid-2"
 
     # Empty session id is a no-op (never persisted).
-    sess.remember_session("chat1::agentZ", "")
-    assert sess.get_session("chat1::agentZ") is None
+    agent_z = sess.activate_connection("agentZ", kind="codex", cwd="")
+    assert sess.remember_session("chat1::agentZ", "", incarnation=agent_z) is False
+    assert sess.get_session("chat1::agentZ", incarnation=agent_z) is None
+
+
+def test_session_registry_lock_excludes_concurrent_threads(monkeypatch, tmp_path) -> None:
+    from deeptutor.services.subagent import sessions as sess
+
+    monkeypatch.setattr(sess, "_path", lambda: tmp_path / "subagent_sessions.json")
+    entered = threading.Event()
+
+    def holder() -> None:
+        with sess._registry_lock():
+            entered.set()
+            time.sleep(0.3)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert entered.wait(2)
+    started = time.monotonic()
+    with sess._registry_lock():
+        waited = time.monotonic() - started
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert waited >= 0.2
+
+
+def test_session_registry_uses_platform_file_locks(monkeypatch, tmp_path) -> None:
+    from deeptutor.services.subagent import sessions as sess
+
+    monkeypatch.setattr(sess, "_path", lambda: tmp_path / "subagent_sessions.json")
+    calls: list[int] = []
+    fake_fcntl = SimpleNamespace(
+        LOCK_EX=1,
+        LOCK_UN=2,
+        flock=lambda _fileno, mode: calls.append(mode),
+    )
+    monkeypatch.setattr(sess, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setitem(sys.modules, "fcntl", fake_fcntl)
+    with sess._registry_lock():
+        assert calls == [fake_fcntl.LOCK_EX]
+    assert calls == [fake_fcntl.LOCK_EX, fake_fcntl.LOCK_UN]
+
+    calls.clear()
+    fake_msvcrt = SimpleNamespace(
+        LK_LOCK=3,
+        LK_UNLCK=4,
+        locking=lambda _fileno, mode, _length: calls.append(mode),
+    )
+    monkeypatch.setattr(sess, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+    with sess._registry_lock():
+        assert calls == [fake_msvcrt.LK_LOCK]
+    assert calls == [fake_msvcrt.LK_LOCK, fake_msvcrt.LK_UNLCK]
+
+
+def test_session_registry_does_not_import_platform_locks_eagerly() -> None:
+    from deeptutor.services.subagent import sessions as sess
+
+    assert "fcntl" not in sess.__dict__
+    assert "msvcrt" not in sess.__dict__
 
 
 # ---- backend options (models.py, the /settings sync source) ------------------
